@@ -1,0 +1,171 @@
+     0.57735027    -0.57735027     0.28867513      12      12
+  0.247652E-06  0.147155E-04  0.147155E-04  0.266644E-04  0.937380E-04  0.937380E-04
+  0.998951E-04  0.998951E-04  0.107354E-03  0.147522E-03  0.170060E-03  0.170060E-03
+     Gaussian Broadening:   0.002 Ry, ngauss=   0
+     DOS =  5.315607 states/spin/Ry/Unit Cell at Ef= 15.830320 eV
+     lambda(    1)= 65.6924   gamma=  893.79 GHz
+     lambda(    2)=  0.0749   gamma=   60.59 GHz
+     lambda(    3)=  0.0749   gamma=   60.59 GHz
+     lambda(    4)=  0.5870   gamma=  859.84 GHz
+     lambda(    5)=  0.0782   gamma=  402.71 GHz
+     lambda(    6)=  0.0782   gamma=  402.71 GHz
+     lambda(    7)=  0.3226   gamma= 1770.39 GHz
+     lambda(    8)=  0.3226   gamma= 1770.39 GHz
+     lambda(    9)=  0.0105   gamma=   61.71 GHz
+     lambda(   10)=  0.0039   gamma=   31.97 GHz
+     lambda(   11)=  0.0280   gamma=  261.75 GHz
+     lambda(   12)=  0.0280   gamma=  261.75 GHz
+     Gaussian Broadening:   0.004 Ry, ngauss=   0
+     DOS =  4.209244 states/spin/Ry/Unit Cell at Ef= 15.828101 eV
+     lambda(    1)=132.5005   gamma= 1427.54 GHz
+     lambda(    2)=  0.0993   gamma=   63.60 GHz
+     lambda(    3)=  0.0993   gamma=   63.60 GHz
+     lambda(    4)=  0.5055   gamma=  586.44 GHz
+     lambda(    5)=  0.0671   gamma=  273.64 GHz
+     lambda(    6)=  0.0671   gamma=  273.64 GHz
+     lambda(    7)=  0.3036   gamma= 1319.30 GHz
+     lambda(    8)=  0.3036   gamma= 1319.30 GHz
+     lambda(    9)=  0.0475   gamma=  221.67 GHz
+     lambda(   10)=  0.0489   gamma=  313.92 GHz
+     lambda(   11)=  0.0488   gamma=  361.27 GHz
+     lambda(   12)=  0.0488   gamma=  361.27 GHz
+     Gaussian Broadening:   0.006 Ry, ngauss=   0
+     DOS =  3.871349 states/spin/Ry/Unit Cell at Ef= 15.825098 eV
+     lambda(    1)=191.8553   gamma= 1901.09 GHz
+     lambda(    2)=  0.1123   gamma=   66.12 GHz
+     lambda(    3)=  0.1123   gamma=   66.12 GHz
+     lambda(    4)=  0.5666   gamma=  604.55 GHz
+     lambda(    5)=  0.0705   gamma=  264.46 GHz
+     lambda(    6)=  0.0705   gamma=  264.46 GHz
+     lambda(    7)=  0.3415   gamma= 1365.14 GHz
+     lambda(    8)=  0.3415   gamma= 1365.14 GHz
+     lambda(    9)=  0.0666   gamma=  285.99 GHz
+     lambda(   10)=  0.0864   gamma=  509.95 GHz
+     lambda(   11)=  0.0632   gamma=  430.15 GHz
+     lambda(   12)=  0.0632   gamma=  430.15 GHz
+     Gaussian Broadening:   0.008 Ry, ngauss=   0
+     DOS =  3.802932 states/spin/Ry/Unit Cell at Ef= 15.822961 eV
+     lambda(    1)=223.1975   gamma= 2172.57 GHz
+     lambda(    2)=  0.1164   gamma=   67.33 GHz
+     lambda(    3)=  0.1164   gamma=   67.33 GHz
+     lambda(    4)=  0.6025   gamma=  631.42 GHz
+     lambda(    5)=  0.0696   gamma=  256.35 GHz
+     lambda(    6)=  0.0696   gamma=  256.35 GHz
+     lambda(    7)=  0.3521   gamma= 1382.33 GHz
+     lambda(    8)=  0.3521   gamma= 1382.33 GHz
+     lambda(    9)=  0.0683   gamma=  288.08 GHz
+     lambda(   10)=  0.0990   gamma=  573.77 GHz
+     lambda(   11)=  0.0629   gamma=  420.57 GHz
+     lambda(   12)=  0.0629   gamma=  420.57 GHz
+     Gaussian Broadening:   0.010 Ry, ngauss=   0
+     DOS =  3.756653 states/spin/Ry/Unit Cell at Ef= 15.821818 eV
+     lambda(    1)=242.2253   gamma= 2329.10 GHz
+     lambda(    2)=  0.1204   gamma=   68.79 GHz
+     lambda(    3)=  0.1204   gamma=   68.79 GHz
+     lambda(    4)=  0.6240   gamma=  645.99 GHz
+     lambda(    5)=  0.0678   gamma=  246.91 GHz
+     lambda(    6)=  0.0678   gamma=  246.91 GHz
+     lambda(    7)=  0.3528   gamma= 1368.39 GHz
+     lambda(    8)=  0.3528   gamma= 1368.39 GHz
+     lambda(    9)=  0.0661   gamma=  275.32 GHz
+     lambda(   10)=  0.1015   gamma=  581.44 GHz
+     lambda(   11)=  0.0601   gamma=  396.85 GHz
+     lambda(   12)=  0.0601   gamma=  396.85 GHz
+     Gaussian Broadening:   0.012 Ry, ngauss=   0
+     DOS =  3.708695 states/spin/Ry/Unit Cell at Ef= 15.821219 eV
+     lambda(    1)=257.7320   gamma= 2446.56 GHz
+     lambda(    2)=  0.1249   gamma=   70.47 GHz
+     lambda(    3)=  0.1249   gamma=   70.47 GHz
+     lambda(    4)=  0.6429   gamma=  657.13 GHz
+     lambda(    5)=  0.0666   gamma=  239.30 GHz
+     lambda(    6)=  0.0666   gamma=  239.30 GHz
+     lambda(    7)=  0.3535   gamma= 1353.50 GHz
+     lambda(    8)=  0.3535   gamma= 1353.50 GHz
+     lambda(    9)=  0.0647   gamma=  266.24 GHz
+     lambda(   10)=  0.1011   gamma=  571.94 GHz
+     lambda(   11)=  0.0581   gamma=  378.54 GHz
+     lambda(   12)=  0.0581   gamma=  378.54 GHz
+     Gaussian Broadening:   0.014 Ry, ngauss=   0
+     DOS =  3.673921 states/spin/Ry/Unit Cell at Ef= 15.820981 eV
+     lambda(    1)=270.9115   gamma= 2547.56 GHz
+     lambda(    2)=  0.1288   gamma=   71.99 GHz
+     lambda(    3)=  0.1288   gamma=   71.99 GHz
+     lambda(    4)=  0.6592   gamma=  667.39 GHz
+     lambda(    5)=  0.0659   gamma=  234.52 GHz
+     lambda(    6)=  0.0659   gamma=  234.52 GHz
+     lambda(    7)=  0.3554   gamma= 1347.94 GHz
+     lambda(    8)=  0.3554   gamma= 1347.94 GHz
+     lambda(    9)=  0.0649   gamma=  264.39 GHz
+     lambda(   10)=  0.1000   gamma=  560.24 GHz
+     lambda(   11)=  0.0570   gamma=  368.18 GHz
+     lambda(   12)=  0.0570   gamma=  368.18 GHz
+     Gaussian Broadening:   0.016 Ry, ngauss=   0
+     DOS =  3.655838 states/spin/Ry/Unit Cell at Ef= 15.821099 eV
+     lambda(    1)=281.2988   gamma= 2632.22 GHz
+     lambda(    2)=  0.1316   gamma=   73.16 GHz
+     lambda(    3)=  0.1316   gamma=   73.16 GHz
+     lambda(    4)=  0.6708   gamma=  675.79 GHz
+     lambda(    5)=  0.0655   gamma=  231.96 GHz
+     lambda(    6)=  0.0655   gamma=  231.96 GHz
+     lambda(    7)=  0.3575   gamma= 1349.32 GHz
+     lambda(    8)=  0.3575   gamma= 1349.32 GHz
+     lambda(    9)=  0.0659   gamma=  267.20 GHz
+     lambda(   10)=  0.0985   gamma=  549.27 GHz
+     lambda(   11)=  0.0565   gamma=  362.98 GHz
+     lambda(   12)=  0.0565   gamma=  362.98 GHz
+     Gaussian Broadening:   0.018 Ry, ngauss=   0
+     DOS =  3.650014 states/spin/Ry/Unit Cell at Ef= 15.821600 eV
+     lambda(    1)=288.6227   gamma= 2696.45 GHz
+     lambda(    2)=  0.1331   gamma=   73.88 GHz
+     lambda(    3)=  0.1331   gamma=   73.88 GHz
+     lambda(    4)=  0.6771   gamma=  681.13 GHz
+     lambda(    5)=  0.0652   gamma=  230.65 GHz
+     lambda(    6)=  0.0652   gamma=  230.65 GHz
+     lambda(    7)=  0.3589   gamma= 1352.47 GHz
+     lambda(    8)=  0.3589   gamma= 1352.47 GHz
+     lambda(    9)=  0.0670   gamma=  271.37 GHz
+     lambda(   10)=  0.0968   gamma=  538.57 GHz
+     lambda(   11)=  0.0561   gamma=  359.87 GHz
+     lambda(   12)=  0.0561   gamma=  359.87 GHz
+     Gaussian Broadening:   0.020 Ry, ngauss=   0
+     DOS =  3.650605 states/spin/Ry/Unit Cell at Ef= 15.822482 eV
+     lambda(    1)=293.0009   gamma= 2737.79 GHz
+     lambda(    2)=  0.1335   gamma=   74.13 GHz
+     lambda(    3)=  0.1335   gamma=   74.13 GHz
+     lambda(    4)=  0.6787   gamma=  682.84 GHz
+     lambda(    5)=  0.0650   gamma=  229.77 GHz
+     lambda(    6)=  0.0650   gamma=  229.77 GHz
+     lambda(    7)=  0.3591   gamma= 1353.42 GHz
+     lambda(    8)=  0.3591   gamma= 1353.42 GHz
+     lambda(    9)=  0.0678   gamma=  274.74 GHz
+     lambda(   10)=  0.0948   gamma=  527.45 GHz
+     lambda(   11)=  0.0556   gamma=  356.91 GHz
+     lambda(   12)=  0.0556   gamma=  356.91 GHz
+     Gaussian Broadening:   0.022 Ry, ngauss=   0
+     DOS =  3.653271 states/spin/Ry/Unit Cell at Ef= 15.823708 eV
+     lambda(    1)=294.7854   gamma= 2756.48 GHz
+     lambda(    2)=  0.1331   gamma=   73.95 GHz
+     lambda(    3)=  0.1331   gamma=   73.95 GHz
+     lambda(    4)=  0.6763   gamma=  680.89 GHz
+     lambda(    5)=  0.0646   gamma=  228.78 GHz
+     lambda(    6)=  0.0646   gamma=  228.78 GHz
+     lambda(    7)=  0.3580   gamma= 1350.15 GHz
+     lambda(    8)=  0.3580   gamma= 1350.15 GHz
+     lambda(    9)=  0.0682   gamma=  276.37 GHz
+     lambda(   10)=  0.0926   gamma=  515.62 GHz
+     lambda(   11)=  0.0550   gamma=  353.23 GHz
+     lambda(   12)=  0.0550   gamma=  353.23 GHz
+     Gaussian Broadening:   0.024 Ry, ngauss=   0
+     DOS =  3.655421 states/spin/Ry/Unit Cell at Ef= 15.825222 eV
+     lambda(    1)=294.4257   gamma= 2754.74 GHz
+     lambda(    2)=  0.1320   gamma=   73.39 GHz
+     lambda(    3)=  0.1320   gamma=   73.39 GHz
+     lambda(    4)=  0.6706   gamma=  675.58 GHz
+     lambda(    5)=  0.0642   gamma=  227.41 GHz
+     lambda(    6)=  0.0642   gamma=  227.41 GHz
+     lambda(    7)=  0.3556   gamma= 1342.08 GHz
+     lambda(    8)=  0.3556   gamma= 1342.08 GHz
+     lambda(    9)=  0.0681   gamma=  276.07 GHz
+     lambda(   10)=  0.0903   gamma=  503.10 GHz
+     lambda(   11)=  0.0543   gamma=  348.60 GHz
+     lambda(   12)=  0.0543   gamma=  348.60 GHz
