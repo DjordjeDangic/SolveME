@@ -2257,7 +2257,7 @@ class mesolver:
 
         np.savetxt(filename, np.column_stack(*out_data), header = header)
 
-    def get_norm_qp_dos(self, dos_filename = 'Normalized_qp_density_of_states', temperature_index = 0, gap_filename = None, emax = 1000.0, nume = nume):
+    def get_norm_qp_dos(self, dos_filename = 'Normalized_qp_density_of_states', temperature_index = 0, gap_filename = None, emax = 1000.0, nume = 10000):
 
         gap = self.get_gap_on_real_axis(temperature_index = temperature_index, filename = gap_filename, emax = emax, nume = nume)
 
