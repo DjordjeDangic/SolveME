@@ -12,8 +12,6 @@ import time
 EV_TO_MEV = 1000.0000000000000000000
 RY_TO_MEV = RY_TO_EV * EV_TO_MEV
 
-import numpy as np
-
 def pade_analytic_continuation_fast(z_i, u_i, z_o, eps= 1.0e-14):
     """
     Optimized multipoint Pade approximant (Vidberg–Serene)
@@ -244,6 +242,15 @@ class mesolver:
         self.anderson = 4
         self.beta = 0.3
 
+        self.iw = None
+        self.delta = None
+        self.Z = None
+        self.indices = None
+
+        self.chi = None
+        self.phi_c = None
+        self.ef = None
+
         self.wee_freq = None
         self.wee_energy = None
         self.wee_dos = None
@@ -458,7 +465,7 @@ class mesolver:
         comm_dyn, fc3 = self._build_fc3(anharmonic=anharmonic, comm_dyn_filename=comm_dyn_filename, comm_nqirr=comm_nqirr, third_order_filename=third_order_filename)
 
         # 2) Build TC engine
-        tc = CC.ThermalConductivity.ThermalConductivity(self.dyn, fc3, kpoint_grid=self.elph_supercell, scattering_grid=scattering_mesh, smearing_scale=1.0, smearing_type="adaptive", cp_mode="quantum", off_diag=False, phase_conv="smooth")
+        tc = CC.ThermalConductivity.ThermalConductivity(self.dyn, fc3, kpoint_grid=self.elph_supercell, scattering_grid=scattering_mesh, smearing_scale=1.0, smearing_type="adaptive", cp_mode="quantum", off_diag=False, phase_conv="step")
         tc.setup_harmonic_properties()
 
         # Match q-points
@@ -521,7 +528,8 @@ class mesolver:
         comm_dyn, fc3 = self._build_fc3(anharmonic=anharmonic, comm_dyn_filename=comm_dyn_filename, comm_nqirr=comm_nqirr, third_order_filename=third_order_filename)
 
         # 2) TC engine
-        tc = CC.ThermalConductivity.ThermalConductivity(self.dyn, fc3, kpoint_grid=self.elph_supercell, scattering_grid=scattering_mesh, smearing_scale=1.0, smearing_type="adaptive", cp_mode="quantum", off_diag=False, phase_conv="smooth")
+        tc = CC.ThermalConductivity.ThermalConductivity(self.dyn, fc3, kpoint_grid=self.elph_supercell, scattering_grid=scattering_mesh, smearing_scale=1.0, smearing_type="adaptive", cp_mode="quantum", off_diag=False, phase_conv="step")
+
         tc.setup_harmonic_properties()
 
         qpt_id, qpt_id1 = match_qpoints(self.elph_qpts, tc)
@@ -1804,14 +1812,15 @@ class mesolver:
                     if mu_star_approx:
                         w_i, delta_i, z_i, index = self.solve_multiband_at_T_mu_star(mu_star_matrix, w_cut, T_meV, delta0, log, smear_id=smear_id)
                     else:
-                        w_i, delta_i, z_i, index = self.solve_multiband_at_T_mu_star(mu_star_matrix, w_cut, T_meV, delta0, log, smear_id=smear_id)
+                        w_i, delta_i, z_i, index = self.solve_multiband_at_T_mu_star(mu_star_matrix, w_cut*10.0/wcut_ratio, T_meV, delta0, log, smear_id=smear_id)
+                        delta0 = delta_i[:, index] * z_i[:, index]
                         if constant_dos:
-                            w_i, delta_i, z_i, phi_c, index = self.solve_multiband_at_T_constant_dos(w_cut, T_meV, delta_i[:, index], z_i[:, index], starting_Ne, log, smear_id=smear_id)
+                            w_i, delta_i, z_i, phi_c, index = self.solve_multiband_at_T_constant_dos(w_cut, T_meV, delta0, z_i[:, index], starting_Ne, log, smear_id=smear_id)
                         else:
                             w_i, delta_i, z_i, chi_i, phi_c, index, ef = self.solve_multiband_at_T(w_cut, T_meV, delta0, z_i[:, index], 0.0, starting_Ne, log, smear_id=smear_id)
                 else:
-                    delta_prev = self.delta[-1][:, self.indices[-1]]
                     z_prev = self.Z[-1][:, self.indices[-1]]
+                    delta_prev = self.delta[-1][:, self.indices[-1]]
 
                     if mu_star_approx:
                         w_i, delta_i, z_i, index = self.solve_multiband_at_T_mu_star(mu_star_matrix, w_cut, T_meV, delta_prev, log, smear_id=smear_id)
@@ -1945,7 +1954,8 @@ class mesolver:
         n_max = len(w)
 
         phi1 = np.zeros((nband, n_max), dtype=float)
-        phi1[:, index] = delta0 * z0  # φ = Δ * Z
+        phi1[:, index] = delta0  
+        print('Initial guess: ', phi1[:, index])
 
         phi_c = np.zeros((nband, self.wee_dos.shape[-1]), dtype=float)
 
@@ -1988,7 +1998,7 @@ class mesolver:
             phi2 = phi1.copy()
             z2 = z1.copy()
             phi_c2 = phi_c.copy()
-
+            print(phi2[:, index], z2[:, index], phi_c2[:, ief])
             tot_phi = phi2[:, np.newaxis, :] + phi_c2[:, :, np.newaxis]
             theta = (w * z2)[:, np.newaxis, :]**2 + self.wee_energy[np.newaxis, :, np.newaxis]**2 + tot_phi**2
 
@@ -2060,7 +2070,7 @@ class mesolver:
         n_max = len(w)
 
         phi1 = np.zeros((nband, n_max), dtype=float)
-        phi1[:, index] = delta0 * z0
+        phi1[:, index] = delta0 
 
         phi_c = np.zeros_like(self.wee_dos, dtype=float)  # shape (nband, N_E)
         z1 = np.ones_like(phi1, dtype=float)
@@ -2201,6 +2211,76 @@ class mesolver:
                     mu_matrix[jband, iband] = mu_matrix[iband, jband]*dos[iband]/dos[jband]
                             
         return mu_matrix
+
+    def get_gap_on_real_axis(self, temperature_index = 0, filename = None, emax = 1000.0, nume = 10000):
+
+        if(self.iw is None):
+            raise RuntimeError('Matsubara frequency array is not allocated. Make sure you have solved the ME equations!')
+
+        out_data = []
+        real_omega_axis = np.linspace(-1*emax, emax, num = nume)
+        out_data.append(real_omega_axis)
+        e_idx = self._find_energy_index(self.ef[temperature_index])
+        iw_pos = self.iw[temperature_index]
+        nb = 1
+        if(self.multiband):
+            nb = self.nmultiband
+        iw_full = np.concatenate((-iw_pos[::-1], iw_pos))
+        z_i = 1j * iw_full
+        gap_on_real = []
+        for j in range(nb):
+            gap = (me.delta[i][j] + curr_phi_c[j, e_idx, np.newaxis]) / me.Z[i][j]
+            gap_full = np.concatenate(( gap[::-1],  gap))
+            u_i = gap_full.astype(complex)
+            gap_on_real = mesolver.pade_analytic_continuation_fast(z_i, u_i, real_omega_axis)
+            out_data.append(gap_on_real.real)
+            out_data.append(gap_on_real.imag)
+
+        if(filename is not None):
+            self.write_gap_on_real_axis(filename, out_data)
+
+        return out_data
+
+    def write_gap_on_real_axis(self, filename = 'Real_axis_gap', out_data = None):
+
+        T_WIDTH = 12          # width for frequency
+        GAP_WIDTH = 22        # width for each gap column
+
+        header = "# "
+        header += f"{'Energy (meV)':>{T_WIDTH - 3}}"
+        for ib in range(self.nmultiband):
+            label = f"Re Gap_band{ib} (meV)"
+            header += f"{label:>{GAP_WIDTH - 7 + 4*ib}}"
+            label = f"Im Gap_band{ib} (meV)"
+            header += f"{label:>{GAP_WIDTH - 7 + 4*ib}}"
+        header += "\n"
+
+        np.savetxt(filename, np.column_stack(*out_data), header = header)
+
+    def get_norm_qp_dos(self, dos_filename = 'Normalized_qp_density_of_states', temperature_index = 0, gap_filename = None, emax = 1000.0, nume = nume):
+
+        gap = self.get_gap_on_real_axis(temperature_index = temperature_index, filename = gap_filename, emax = emax, nume = nume)
+
+        nb = 1
+        if(self.multiband):
+            nb = self.nmultiband
+
+        dos = np.zeros(nume, dtype=complex)
+        for ib in range(nb):
+            igap = gap[1 + ib*2] + 1j*gap[2 + ib*2]
+            dos += gap[0]/np.sqrt(gap[0]**2 - igap**2)
+
+        header = "# "
+        header += f"{'Energy (meV)':>{9}}"
+            label = f"Re Ns/Nef"
+            header += f"{label:>{15}}"
+            label = f"Im Ns/Nef"
+            header += f"{label:>{15}}"
+        header += "\n"
+
+        np.savetxt(dos_filename, np.column_stack([gap[0], dos.real, dos.imag]), header = header)
+
+        return gap[0], dos
 
     def save(self, filename = 'sc.pkl'):
 
