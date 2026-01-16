@@ -2229,10 +2229,15 @@ class mesolver:
         z_i = 1j * iw_full
         gap_on_real = []
         for j in range(nb):
-            gap = (me.delta[i][j] + curr_phi_c[j, e_idx, np.newaxis]) / me.Z[i][j]
+            if(self.multiband):
+                curr_phi_c = np.array(self.phi_c[temperature_index][j])
+                gap = (self.delta[temperature_index][j] + curr_phi_c[e_idx, np.newaxis]) / self.Z[temperature_index][j]
+            else:
+                curr_phi_c = np.array(self.phi_c[temperature_index])
+                gap = (self.delta[temperature_index] + curr_phi_c[e_idx, np.newaxis]) / self.Z[temperature_index]
             gap_full = np.concatenate(( gap[::-1],  gap))
             u_i = gap_full.astype(complex)
-            gap_on_real = mesolver.pade_analytic_continuation_fast(z_i, u_i, real_omega_axis)
+            gap_on_real = pade_analytic_continuation_fast(z_i, u_i, real_omega_axis)
             out_data.append(gap_on_real.real)
             out_data.append(gap_on_real.imag)
 
@@ -2243,19 +2248,24 @@ class mesolver:
 
     def write_gap_on_real_axis(self, filename = 'Real_axis_gap', out_data = None):
 
-        T_WIDTH = 12          # width for frequency
-        GAP_WIDTH = 22        # width for each gap column
+        GAP_WIDTH = 24        # width for each gap column
 
-        header = "# "
-        header += f"{'Energy (meV)':>{T_WIDTH - 3}}"
-        for ib in range(self.nmultiband):
-            label = f"Re Gap_band{ib} (meV)"
-            header += f"{label:>{GAP_WIDTH - 7 + 4*ib}}"
-            label = f"Im Gap_band{ib} (meV)"
-            header += f"{label:>{GAP_WIDTH - 7 + 4*ib}}"
+        header = " "
+        header += f"{'Energy (meV)':>{GAP_WIDTH}}"
+        if(self.multiband):
+            for ib in range(self.nmultiband):
+                label = f"Re Gap_band{ib + 1} (meV)"
+                header += f"{label:>{GAP_WIDTH  }}"
+                label = f"Im Gap_band{ib + 1} (meV)"
+                header += f"{label:>{GAP_WIDTH  }}"
+        else:
+            label = f"Re Gap (meV)"
+            header += f"{label:>{GAP_WIDTH  }}"
+            label = f"Im Gap (meV)"
+            header += f"{label:>{GAP_WIDTH  }}"
         header += "\n"
 
-        np.savetxt(filename, np.column_stack(*out_data), header = header)
+        np.savetxt(filename, np.column_stack(tuple(out_data)), header = header)
 
     def get_norm_qp_dos(self, dos_filename = 'Normalized_qp_density_of_states', temperature_index = 0, gap_filename = None, emax = 1000.0, nume = 10000):
 
@@ -2270,12 +2280,12 @@ class mesolver:
             igap = gap[1 + ib*2] + 1j*gap[2 + ib*2]
             dos += gap[0]/np.sqrt(gap[0]**2 - igap**2)
 
-        header = "# "
-        header += f"{'Energy (meV)':>{9}}"
-            label = f"Re Ns/Nef"
-            header += f"{label:>{15}}"
-            label = f"Im Ns/Nef"
-            header += f"{label:>{15}}"
+        header = " "
+        header += f"{'Energy (meV)':>{24}}"
+        label = f"Re Ns/Nef"
+        header += f"{label:>{24}}"
+        label = f"Im Ns/Nef"
+        header += f"{label:>{24}}"
         header += "\n"
 
         np.savetxt(dos_filename, np.column_stack([gap[0], dos.real, dos.imag]), header = header)
