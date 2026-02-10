@@ -325,7 +325,7 @@ class mesolver:
 
         # Handle multiband
         if self.multiband:
-            self.keep_bands = [ib for ib in range(nband_el) if np.any(self.elph_dos[ib] >= self.dos_thr)]
+            self.keep_bands = [ib for ib in range(len(self.elph_dos)) if np.any(self.elph_dos[ib] >= self.dos_thr)]
             if(self.av_mapping is None):
                 self.nmultiband = len(self.keep_bands)
             else:
@@ -2052,7 +2052,7 @@ class mesolver:
             phi2 = phi1.copy()
             z2 = z1.copy()
             phi_c2 = phi_c.copy()
-            print(phi2[:, index], z2[:, index], phi_c2[:, ief])
+            #print(phi2[:, index], z2[:, index], phi_c2[:, ief])
             tot_phi = phi2[:, np.newaxis, :] + phi_c2[:, :, np.newaxis]
             theta = (w * z2)[:, np.newaxis, :]**2 + self.wee_energy[np.newaxis, :, np.newaxis]**2 + tot_phi**2
 
