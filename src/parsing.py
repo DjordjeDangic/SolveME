@@ -46,7 +46,7 @@ def get_data_from_elph_file(filename, natom, skip):
                     if(len(line) == 1):
                         curr_dos.append(float(line[0]))
                     elif(len(line) == 2):
-                        curr_dos.append(float(line[1]))
+                        curr_dos.append([float(line[0]), float(line[1])])
                     smear_elph = np.zeros((3*natom, 3*natom), dtype = complex)
                     iline = 0
                     for iband in range(3*natom):
@@ -63,7 +63,7 @@ def get_data_from_elph_file(filename, natom, skip):
         raise RuntimeError('Can not find ' + filename + ' electron-phonon interaction file !')
     return curr_smear, np.array(curr_dos), curr_elph
 
-def read_elph(prefix, nqirr, natom, nband_el = None):
+def read_elph(prefix, nqirr, natom, nband_el = None, dos_thr = 1.0e-6):
     qpts = np.zeros((nqirr, 3))
     qstar = []
     weights = np.zeros(nqirr)
@@ -78,27 +78,31 @@ def read_elph(prefix, nqirr, natom, nband_el = None):
                 dos = []
             for iband in range(nband_el):
                 elph_band1 = []
+                jband1 = -1
                 for jband in range(nband_el):
                     filename = prefix + str(iqpt + 1) + '.elph.d.mat.' + str(iqpt + 1) + '.' + str(iband+1) + '.' + str(jband+1)
                     curr_smear, curr_dos, curr_elph = get_data_from_elph_file(filename, natom, skip)
-                    if(iqpt == 0 and iband == 0):
-                        smearings = curr_smear.copy()
-                        dos.append(curr_dos.copy())
-                    elif(iqpt != 0 and iband == 0):
-                        if(smearings != curr_smear):
-                            print('Smearing at ' + str(iqpt + 1) + ' q point is not equal to smearing at Gamma!')
-                            print('Gamma: ')
-                            print(smearings)
-                            print(str(iqpt + 1) + ': ')
-                            print(curr_smear)
-                        elif(np.linalg.norm(curr_dos - dos[jband]) > 1.0e-6 and np.any(np.abs(curr_dos) > 1.0e-6)):
-                            print('DOS at ' + str(iqpt + 1) + ' q point is not equal to DOS at Gamma!')
-                            print('Gamma: ')
-                            print(dos[jband])
-                            print(str(iqpt + 1) + ': ')
-                            print(curr_dos)
-                    elph_band1.append(curr_elph)
-                elph_band.append(elph_band1)
+                    if(np.any(curr_dos[:,1] > dos_thr)):
+                        jband1 += 1
+                        if(iqpt == 0 and iband == 0):
+                            smearings = curr_smear.copy()
+                            dos.append(curr_dos[:,1].copy())
+                        elif(iqpt != 0 and iband == 0):
+                            if(smearings != curr_smear):
+                                print('Smearing at ' + str(iqpt + 1) + ' q point is not equal to smearing at Gamma!')
+                                print('Gamma: ')
+                                print(smearings)
+                                print(str(iqpt + 1) + ': ')
+                                print(curr_smear)
+                            elif(np.linalg.norm(curr_dos[:,1] - dos[jband1]) > 1.0e-6 and np.any(np.abs(curr_dos[:,1]) > 1.0e-6)):
+                                print('DOS at ' + str(iqpt + 1) + ' q point is not equal to DOS at Gamma!')
+                                print('Gamma: ')
+                                print(dos[jband1])
+                                print(str(iqpt + 1) + ': ')
+                                print(curr_dos)
+                        elph_band1.append(curr_elph)
+                if(np.any(curr_dos[:,0] > dos_thr) and len(elph_band1) > 0):
+                    elph_band.append(elph_band1)
             elph.append(elph_band)
         else:
             filename = prefix + str(iqpt + 1) + '.elph.d.mat.' + str(iqpt + 1)
