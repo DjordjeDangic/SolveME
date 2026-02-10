@@ -302,7 +302,7 @@ class mesolver:
         if(elph_nqirr == 0):
             raise RuntimeError('Could not find any of the electron-phonon matrix element files !')
 
-        qpts, smearings, dos, elph, weights, qstar = read_elph(elphdyn_filename, elph_nqirr, dyn.structure.N_atoms, nband_el)
+        qpts, smearings, dos, elph, weights, qstar = read_elph(elphdyn_filename, elph_nqirr, dyn.structure.N_atoms, nband_el, self.dos_thr)
 
         if(not self.multiband and nband_el is not None):
             self.elph_qpts = qpts
@@ -1143,12 +1143,12 @@ class mesolver:
 
         return self._anderson_unpack(mixed, phi_shape, z_shape, phi_c_shape)
 
-    def solve(self, T_start = 1.0, T_end = 300.0, wcut_ratio = 10.0, mu_star_approx = True, ntemp = 2, mu_star = 0.15, gap_filename = 'SC_GAP', log = False, smear_id = 0, constant_dos = False):
+    def solve(self, T_start = 1.0, T_end = 300.0, wcut_ratio = 10.0, mu_star_approx = True, ntemp = 2, mu_star = 0.15, gap_filename = 'SC_GAP', log = False, smear_id = 0, constant_dos = False, impurity_scattering = None):
 
         if(self.multiband):
-            return self.solve_multiband(T_start = T_start, T_end = T_end, wcut_ratio = wcut_ratio, mu_star_approx = mu_star_approx, ntemp = ntemp, mu_star = mu_star, gap_filename = gap_filename, log = log, smear_id = smear_id, constant_dos = constant_dos)
+            return self.solve_multiband(T_start = T_start, T_end = T_end, wcut_ratio = wcut_ratio, mu_star_approx = mu_star_approx, ntemp = ntemp, mu_star = mu_star, gap_filename = gap_filename, log = log, smear_id = smear_id, constant_dos = constant_dos, impurity_scattering = impurity_scattering)
         else:
-            return self.solve_isotropic(T_start = T_start, T_end = T_end, wcut_ratio = wcut_ratio, mu_star_approx = mu_star_approx, ntemp = ntemp, mu_star = mu_star, gap_filename = gap_filename, log = log, smear_id = smear_id, constant_dos = constant_dos)
+            return self.solve_isotropic(T_start = T_start, T_end = T_end, wcut_ratio = wcut_ratio, mu_star_approx = mu_star_approx, ntemp = ntemp, mu_star = mu_star, gap_filename = gap_filename, log = log, smear_id = smear_id, constant_dos = constant_dos, impurity_scattering = impurity_scattering)
 
     def solve_isotropic(
         self,
@@ -1162,6 +1162,7 @@ class mesolver:
         log: bool = False,
         smear_id: int = 0,
         constant_dos: bool = False,
+        impurity_scattering: float = 0.0
     ):
         """
         Solve isotropic Migdal–Eliashberg equations on a temperature grid.
@@ -1178,6 +1179,9 @@ class mesolver:
         w_cut = float(np.max(self.a2f_omega)) * float(wcut_ratio)
 
         self.temperatures = np.linspace(T_start, T_end, num=ntemp)
+
+        if(impurity_scattering is None):
+            impurity_scattering = 0.0
 
         # Storage
         self.iw = []
@@ -1223,14 +1227,14 @@ class mesolver:
 
                 # Choose appropriate solver
                 if mu_star_approx:
-                    w_i, delta_i, z_i, index = self.solve_isotropic_at_T_mu_star(mu_star, w_cut, temp_mev, delta0, log, smear_id=smear_id)
+                    w_i, delta_i, z_i, index = self.solve_isotropic_at_T_mu_star(mu_star, w_cut, temp_mev, delta0, log, smear_id=smear_id, impurity_scattering = impurity_scattering)
                 else:
                     if constant_dos:
-                        w_i, delta_i, z_i, phi_c, index = self.solve_isotropic_at_T_constant_dos(w_cut, temp_mev, delta0, starting_Ne, log, smear_id=smear_id)
+                        w_i, delta_i, z_i, phi_c, index = self.solve_isotropic_at_T_constant_dos(w_cut, temp_mev, delta0, starting_Ne, log, smear_id=smear_id, impurity_scattering = impurity_scattering)
                         chi_i = None
                         ef = 0.0  # EF assumed at 0 in constant DOS case
                     else:
-                        w_i, delta_i, z_i, chi_i, phi_c, index, ef = self.solve_isotropic_at_T(w_cut, temp_mev, delta0, starting_Ne, log, smear_id=smear_id)
+                        w_i, delta_i, z_i, chi_i, phi_c, index, ef = self.solve_isotropic_at_T(w_cut, temp_mev, delta0, starting_Ne, log, smear_id=smear_id, impurity_scattering = impurity_scattering)
 
             # Store results
             self.iw.append(np.array(w_i, copy=True))
@@ -1382,11 +1386,13 @@ class mesolver:
 
         return w
 
-    def generate_Lnm_matrix(self, w, smear_id = 0):
+    def generate_Lnm_matrix(self, w, smear_id = 0, impurity_scattering_scaled = 0.0):
 
         lnm = np.zeros((len(w), len(w)))
         for j in range(len(w)):
             lnm[0,j] = np.trapz(2.0 * self.a2f_omega * self.a2f[smear_id] / ((w[0] - w[j])**2 + self.a2f_omega**2), self.a2f_omega)
+            if(j == 0):
+                lnm[0,j] += impurity_scattering_scaled
         for i in range(len(w)):
             for j in range(i, len(w)):
                 lnm[i,j] = lnm[0, abs(j-i)]
@@ -1394,11 +1400,13 @@ class mesolver:
 
         return lnm
 
-    def generate_Lnm_matrix_multiband(self, w, smear_id = 0):
+    def generate_Lnm_matrix_multiband(self, w, smear_id = 0, impurity_scattering_scaled = 0.0):
 
         lnm = np.zeros((self.nmultiband, self.nmultiband, len(w), len(w)))
         for j in range(len(w)):
             lnm[:,:,0,j] = np.trapz(2.0 * self.a2f_omega * self.a2f[smear_id,:,:] / ((w[0] - w[j])**2 + self.a2f_omega**2), self.a2f_omega)
+            if(j == 0):
+                lnm[:,:,0,j] += impurity_scattering_scaled
         for i in range(len(w)):
             for j in range(i, len(w)):
                 lnm[:,:,i,j] = lnm[:,:,0, abs(j-i)]
@@ -1408,7 +1416,7 @@ class mesolver:
 
         return lnm
 
-    def solve_isotropic_at_T_mu_star(self, mu_star, w_cut, T, delta0, log=False, smear_id=0):
+    def solve_isotropic_at_T_mu_star(self, mu_star, w_cut, T, delta0, log=False, smear_id=0, impurity_scattering = 0.0):
         """
         Solve isotropic Eliashberg equations at temperature T
         using the mu* approximation.
@@ -1417,10 +1425,12 @@ class mesolver:
         w = self.get_matsubara_frequencies_only_positive(w_cut, T)
         w_full = self.get_matsubara_frequencies(w_cut, T)
 
+        impurity_scattering_scaled = impurity_scattering / (2.0 * np.pi * T)
+
         n_max = len(w)          # number of positive frequencies
         index0 = 0              # index of w0 = πT (Matsubara fundamental)
 
-        lnm = self.generate_Lnm_matrix(w_full, smear_id=smear_id)
+        lnm = self.generate_Lnm_matrix(w_full, smear_id=smear_id, impurity_scattering_scaled = impurity_scattering_scaled)
 
         lp = np.zeros((n_max, n_max), dtype=float)
         lm = np.zeros_like(lp)
@@ -1474,7 +1484,7 @@ class mesolver:
 
         return w, delta_old, Z_old, index0
 
-    def solve_isotropic_at_T_constant_dos(self, w_cut, T, delta0, Ne, log=False, smear_id=0):
+    def solve_isotropic_at_T_constant_dos(self, w_cut, T, delta0, Ne, log=False, smear_id=0, impurity_scattering = 0.0):
         """
         Solve isotropic Eliashberg equations at temperature T using:
             - constant electronic DOS (EF = 0)
@@ -1488,8 +1498,9 @@ class mesolver:
         w_full = self.get_matsubara_frequencies(w_cut, T)
         n_max = len(w)
         index0 = 0
+        impurity_scattering_scaled = impurity_scattering / (2.0 * np.pi * T)
 
-        lnm = self.generate_Lnm_matrix(w_full, smear_id=smear_id)
+        lnm = self.generate_Lnm_matrix(w_full, smear_id=smear_id, impurity_scattering_scaled = impurity_scattering_scaled)
 
         phi1 = np.zeros(n_max)
         phi1[index0] = delta0
@@ -1624,7 +1635,9 @@ class mesolver:
 
         w = self.get_matsubara_frequencies_only_positive(w_cut, T)
         w_full = self.get_matsubara_frequencies(w_cut, T)
-        lnm = self.generate_Lnm_matrix(w_full, smear_id=smear_id)
+        impurity_scattering_scaled = impurity_scattering / (2.0 * np.pi * T)
+
+        lnm = self.generate_Lnm_matrix(w_full, smear_id=smear_id, impurity_scattering_scaled = impurity_scattering_scaled)
 
         index = 0
         n_max = len(w)
@@ -1761,7 +1774,7 @@ class mesolver:
 
         return w, phi1, z1, chi1, phi_c, index, ef
 
-    def solve_multiband(self, T_start=1.0, T_end=300.0, wcut_ratio=10.0, mu_star_approx=True, ntemp=2, mu_star=0.15, gap_filename="SC_GAP", log=False, smear_id=0, constant_dos=False):
+    def solve_multiband(self, T_start=1.0, T_end=300.0, wcut_ratio=10.0, mu_star_approx=True, ntemp=2, mu_star=0.15, gap_filename="SC_GAP", log=False, smear_id=0, constant_dos=False, impurity_scattering = 0.0):
 
         if not mu_star_approx and self.wee is None:
             raise RuntimeError("You have not supplied Coulomb interaction. Cannot continue calculation!")
@@ -1802,7 +1815,6 @@ class mesolver:
                     phi_c = np.zeros((self.nmultiband, len(self.wee_energy)))
                     ef = 0.0
             else:
-                # Convert T → meV
                 T_meV = Tcurr * K_B * EV_TO_MEV
 
                 if it == 0:
@@ -1810,25 +1822,29 @@ class mesolver:
                     delta_init = delta0
 
                     if mu_star_approx:
-                        w_i, delta_i, z_i, index = self.solve_multiband_at_T_mu_star(mu_star_matrix, w_cut, T_meV, delta0, log, smear_id=smear_id)
+                        w_i, delta_i, z_i, index = self.solve_multiband_at_T_mu_star(mu_star_matrix, w_cut, T_meV, delta0, log, smear_id=smear_id, impurity_scattering = impurity_scattering)
                     else:
-                        w_i, delta_i, z_i, index = self.solve_multiband_at_T_mu_star(mu_star_matrix, w_cut*10.0/wcut_ratio, T_meV, delta0, log, smear_id=smear_id)
+                        w_i, delta_i, z_i, index = self.solve_multiband_at_T_mu_star(mu_star_matrix, w_cut*10.0/wcut_ratio, T_meV, delta0, log, smear_id=smear_id, impurity_scattering = impurity_scattering)
                         delta0 = delta_i[:, index] * z_i[:, index]
                         if constant_dos:
-                            w_i, delta_i, z_i, phi_c, index = self.solve_multiband_at_T_constant_dos(w_cut, T_meV, delta0, z_i[:, index], starting_Ne, log, smear_id=smear_id)
+                            w_i, delta_i, z_i, phi_c, index = self.solve_multiband_at_T_constant_dos(w_cut, T_meV, delta0, z_i[:, index], starting_Ne, log, smear_id=smear_id, impurity_scattering = impurity_scattering)
+                            chi_i = np.zeros((self.nmultiband, len(w_i)))
+                            ef = 0.0
                         else:
-                            w_i, delta_i, z_i, chi_i, phi_c, index, ef = self.solve_multiband_at_T(w_cut, T_meV, delta0, z_i[:, index], 0.0, starting_Ne, log, smear_id=smear_id)
+                            w_i, delta_i, z_i, chi_i, phi_c, index, ef = self.solve_multiband_at_T(w_cut, T_meV, delta0, z_i[:, index], 0.0, starting_Ne, log, smear_id=smear_id, impurity_scattering = impurity_scattering)
                 else:
                     z_prev = self.Z[-1][:, self.indices[-1]]
                     delta_prev = self.delta[-1][:, self.indices[-1]]
 
                     if mu_star_approx:
-                        w_i, delta_i, z_i, index = self.solve_multiband_at_T_mu_star(mu_star_matrix, w_cut, T_meV, delta_prev, log, smear_id=smear_id)
+                        w_i, delta_i, z_i, index = self.solve_multiband_at_T_mu_star(mu_star_matrix, w_cut, T_meV, delta_prev, log, smear_id=smear_id, impurity_scattering = impurity_scattering)
                     else:
                         if constant_dos:
-                            w_i, delta_i, z_i, phi_c, index = self.solve_multiband_at_T_constant_dos(w_cut, T_meV, delta_prev, z_prev, starting_Ne, log, smear_id=smear_id)
+                            w_i, delta_i, z_i, phi_c, index = self.solve_multiband_at_T_constant_dos(w_cut, T_meV, delta_prev, z_prev, starting_Ne, log, smear_id=smear_id, impurity_scattering = impurity_scattering)
+                            chi_i = np.zeros((self.nmultiband, len(w_i)))
+                            ef = 0.0
                         else:
-                            w_i, delta_i, z_i, chi_i, phi_c, index, ef = self.solve_multiband_at_T(w_cut, T_meV, delta_prev, z_prev, self.ef[-1], starting_Ne, log, smear_id=smear_id)
+                            w_i, delta_i, z_i, chi_i, phi_c, index, ef = self.solve_multiband_at_T(w_cut, T_meV, delta_prev, z_prev, self.ef[-1], starting_Ne, log, smear_id=smear_id, impurity_scattering = impurity_scattering)
 
             self.iw.append(w_i)
             self.delta.append(delta_i)
@@ -1836,9 +1852,8 @@ class mesolver:
             self.indices.append(index)
 
             if not mu_star_approx:
-                if not constant_dos:
-                    self.chi.append(chi_i)
-                    self.ef.append(ef)
+                self.chi.append(chi_i)
+                self.ef.append(ef)
                 self.phi_c.append(phi_c)
 
             if mu_star_approx:
@@ -1858,7 +1873,43 @@ class mesolver:
 
         self.write_gap(gap_filename=gap_filename, mu_star_approx=mu_star_approx, constant_dos=constant_dos)
 
-    def solve_multiband_at_T_mu_star(self, mu_star, w_cut, T, delta0, log=False, smear_id=0):
+    def get_impurity_scattering_matrix(self, impurity_scattering = 0.0, T = 0.1, verbose = True):
+
+        impurity_scattering_scaled = np.zeros((self.nmultiband, self.nmultiband))
+        if(impurity_scattering != 0.0 and impurity_scattering is not None):
+            ief = np.argmin(np.abs(self.wee_energy))
+            Nef = self.wee_dos[:, ief]
+            if np.any(Nef == 0.0):
+                raise RuntimeError("Density of states at the Fermi level is 0.0!")
+            tot_coeff = 0.0
+            for ibnd in range(self.nmultiband):
+                for jbnd in range(self.nmultiband):
+                    tot_coeff += (Nef[ibnd] + Nef[jbnd])*np.sqrt(Nef[ibnd] * Nef[jbnd])
+            tot_coeff = impurity_scattering * np.sum(Nef) / tot_coeff 
+            for ibnd in range(self.nmultiband):
+                for jbnd in range(self.nmultiband):
+                    impurity_scattering_scaled[ibnd, jbnd] = np.sqrt(Nef[ibnd] * Nef[jbnd]) * tot_coeff * 2.0
+        
+            if(verbose):
+                print('Estimated impurity scattering: ')
+                for ibnd in range(self.nmultiband):
+                    print('  |', end = '')
+                    for jbnd in range(self.nmultiband):
+                        print(' ' + format(impurity_scattering_scaled[ibnd, jbnd], '.6f'), end = '')
+                    print('  |')
+                print('')
+                tot_impurity_scattering = 0.0
+                for ibnd in range(self.nmultiband):
+                    for jbnd in range(self.nmultiband):
+                        tot_impurity_scattering += impurity_scattering_scaled[ibnd, jbnd] * Nef[ibnd]
+                tot_impurity_scattering /= np.sum(Nef)
+                print('Total impurity scattering: ', tot_impurity_scattering)
+
+        impurity_scattering_scaled = impurity_scattering_scaled / (2.0 * np.pi * T)
+
+        return impurity_scattering_scaled
+
+    def solve_multiband_at_T_mu_star(self, mu_star, w_cut, T, delta0, log=False, smear_id=0, impurity_scattering = 0.0):
         """
         Multiband Eliashberg solver at temperature T using a μ* matrix.
         """
@@ -1868,6 +1919,8 @@ class mesolver:
         w = self.get_matsubara_frequencies_only_positive(w_cut, T)
         w_inv = 1.0 / w
         w_full = self.get_matsubara_frequencies(w_cut, T)
+
+        impurity_scattering_scaled = self.get_impurity_scattering_matrix(impurity_scattering, T)
 
         n_max = len(w)
         index = 0
@@ -1881,7 +1934,7 @@ class mesolver:
         diff = np.ones(nband, dtype=float)
         iteration = 1
 
-        lnm = self.generate_Lnm_matrix_multiband(w_full, smear_id=smear_id)
+        lnm = self.generate_Lnm_matrix_multiband(w_full, smear_id=smear_id, impurity_scattering_scaled = impurity_scattering_scaled)
 
         if not (w_full[n_max + 1] > 0.0 and w_full[n_max] < 0.0):
             raise RuntimeError("Wrong choice of w0")
@@ -1930,7 +1983,7 @@ class mesolver:
 
         return w, delta1, z1, index
 
-    def solve_multiband_at_T_constant_dos(self, w_cut, T, delta0, z0, Ne, log=False, smear_id=0):
+    def solve_multiband_at_T_constant_dos(self, w_cut, T, delta0, z0, Ne, log=False, smear_id=0, impurity_scattering = 0.0):
         """
         Multiband isotropic Eliashberg solver at temperature T with:
           - constant electronic DOS (EF = 0)
@@ -1948,8 +2001,9 @@ class mesolver:
         w = self.get_matsubara_frequencies_only_positive(w_cut, T)
         w_inv = 1.0 / w
         w_full = self.get_matsubara_frequencies(w_cut, T)
+        impurity_scattering_scaled = self.get_impurity_scattering_matrix(impurity_scattering, T)
 
-        lnm = self.generate_Lnm_matrix_multiband(w_full, smear_id=smear_id)
+        lnm = self.generate_Lnm_matrix_multiband(w_full, smear_id=smear_id, impurity_scattering_scaled = impurity_scattering_scaled)
         index = 0
         n_max = len(w)
 
@@ -2046,7 +2100,7 @@ class mesolver:
 
         return w, phi1, z1, phi_c, index
 
-    def solve_multiband_at_T(self, w_cut, T, delta0, z0, ef, Ne, log=False, smear_id=0):
+    def solve_multiband_at_T(self, w_cut, T, delta0, z0, ef, Ne, log=False, smear_id=0, impurity_scattering = 0.0):
         """
         Multiband Eliashberg solver at temperature T with:
           - energy-dependent DOS
@@ -2064,8 +2118,9 @@ class mesolver:
         w = self.get_matsubara_frequencies_only_positive(w_cut, T)
         w_inv = 1.0 / w
         w_full = self.get_matsubara_frequencies(w_cut, T)
+        impurity_scattering_scaled = self.get_impurity_scattering_matrix(impurity_scattering, T)
 
-        lnm = self.generate_Lnm_matrix_multiband(w_full, smear_id=smear_id)
+        lnm = self.generate_Lnm_matrix_multiband(w_full, smear_id=smear_id, impurity_scattering_scaled = impurity_scattering_scaled)
         index = 0
         n_max = len(w)
 
