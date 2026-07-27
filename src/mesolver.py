@@ -465,8 +465,12 @@ class mesolver:
         comm_dyn, fc3 = self._build_fc3(anharmonic=anharmonic, comm_dyn_filename=comm_dyn_filename, comm_nqirr=comm_nqirr, third_order_filename=third_order_filename)
 
         # 2) Build TC engine
-        tc = CC.ThermalConductivity.ThermalConductivity(self.dyn, fc3, kpoint_grid=self.elph_supercell, scattering_grid=scattering_mesh, smearing_scale=1.0, smearing_type="adaptive", cp_mode="quantum", off_diag=False, phase_conv="step")
-        tc.setup_harmonic_properties()
+        if(automatic_a2f_smearing):
+            tc = CC.ThermalConductivity.ThermalConductivity(self.dyn, fc3, kpoint_grid=self.elph_supercell, scattering_grid=scattering_mesh, smearing_scale=1.0, smearing_type="adaptive", cp_mode="quantum", off_diag=False, phase_conv="step")
+            tc.setup_harmonic_properties()
+        else:
+            tc = CC.ThermalConductivity.ThermalConductivity(self.dyn, fc3, kpoint_grid=self.elph_supercell, scattering_grid=scattering_mesh, smearing_scale=None, smearing_type="constant", cp_mode="quantum", off_diag=False, phase_conv="step")
+            tc.setup_harmonic_properties(a2f_smearing)
 
         # Match q-points
         qpt_id, qpt_id1 = match_qpoints(self.elph_qpts, tc)
@@ -528,9 +532,12 @@ class mesolver:
         comm_dyn, fc3 = self._build_fc3(anharmonic=anharmonic, comm_dyn_filename=comm_dyn_filename, comm_nqirr=comm_nqirr, third_order_filename=third_order_filename)
 
         # 2) TC engine
-        tc = CC.ThermalConductivity.ThermalConductivity(self.dyn, fc3, kpoint_grid=self.elph_supercell, scattering_grid=scattering_mesh, smearing_scale=1.0, smearing_type="adaptive", cp_mode="quantum", off_diag=False, phase_conv="step")
-
-        tc.setup_harmonic_properties()
+        if(automatic_a2f_smearing):
+            tc = CC.ThermalConductivity.ThermalConductivity(self.dyn, fc3, kpoint_grid=self.elph_supercell, scattering_grid=scattering_mesh, smearing_scale=1.0, smearing_type="adaptive", cp_mode="quantum", off_diag=False, phase_conv="step")
+            tc.setup_harmonic_properties()
+        else:
+            tc = CC.ThermalConductivity.ThermalConductivity(self.dyn, fc3, kpoint_grid=self.elph_supercell, scattering_grid=scattering_mesh, smearing_scale=None, smearing_type="constant", cp_mode="quantum", off_diag=False, phase_conv="step")
+            tc.setup_harmonic_properties(a2f_smearing)
 
         qpt_id, qpt_id1 = match_qpoints(self.elph_qpts, tc)
 
@@ -1622,7 +1629,7 @@ class mesolver:
 
         return w, phi1, z1, phi_c, index0
 
-    def solve_isotropic_at_T(self, w_cut, T, delta0, Ne, log=False, smear_id=0):
+    def solve_isotropic_at_T(self, w_cut, T, delta0, Ne, log=False, smear_id=0, impurity_scattering = None):
         """
         Solve isotropic Eliashberg equations at temperature T with full
         Coulomb interaction and energy-dependent DOS.
