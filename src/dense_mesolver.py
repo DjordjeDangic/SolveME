@@ -1,7 +1,7 @@
 """Public SolveME solver with symmetry/Fourier-interpolated electron-phonon grids.
 
 This module keeps the existing :class:`mesolver.mesolver` implementation
-unchanged and layers the dense-q harmonic path on top of it.  Calling
+unchanged and layers the dense-q harmonic path on top of it. Calling
 ``calculate_a2f`` without ``interpolation_mesh`` delegates exactly to the
 legacy solver.
 """
@@ -38,27 +38,7 @@ class mesolver(_BaseMesolver):
         validate_symmetry=False,
         phonon_evaluator=None,
     ):
-        """Calculate alpha2F, optionally on a Fourier-interpolated q mesh.
-
-        Parameters added by the dense-q extension
-        -----------------------------------------
-        interpolation_mesh : tuple(int, int, int) or None
-            Target regular q mesh.  ``None`` preserves legacy SolveME behavior.
-        interpolation_shift : tuple(float, float, float)
-            Target-mesh shift in units of one mesh spacing.
-        interpolation_block_size : int
-            Number of target q points processed at once.
-        validate_symmetry : bool
-            Check all symmetry paths while reconstructing the coarse full grid.
-        phonon_evaluator : callable, optional
-            Compatibility adapter passed to ``elph_dense``.
-
-        Notes
-        -----
-        Dense interpolation currently supports the harmonic isotropic path.
-        Anharmonic lineshapes, mode mixing and multiband interpolation remain
-        on the established irreducible-grid implementation.
-        """
+        """Calculate alpha2F, optionally on a Fourier-interpolated q mesh."""
         if interpolation_mesh is None:
             return super().calculate_a2f(
                 anharmonic=anharmonic,
@@ -125,21 +105,29 @@ class mesolver(_BaseMesolver):
         return tc
 
     def _fractional_atom_positions(self):
-        """Return direct fractional atomic positions for the interpolation gauge."""
         cell = np.asarray(self.dyn.structure.unit_cell, dtype=float)
         coords = np.asarray(self.dyn.structure.coords, dtype=float)
         return np.dot(coords, np.linalg.inv(cell))
 
     def _mass_scaled_phonon_evaluator(self, phonons, qpoint):
-        """Evaluate target-q phonons and reproduce SolveME's mass scaling."""
-        if hasattr(phonons, "DyagDinQ"):
-            freq, eig = phonons.DyagDinQ(qpoint)
+        """Evaluate arbitrary-q phonons and reproduce SolveME's mass scaling.
+
+        The dense path passes a ThermalConductivity object here. Its
+        ``get_frequency_at_q`` method is the CellConstructor API intended for
+        arbitrary q-vectors; ``Phonons.DyagDinQ`` instead expects an integer
+        index into an already stored q list and must not be used here.
+        """
+        if hasattr(phonons, "get_frequency_at_q"):
+            result = phonons.get_frequency_at_q(qpoint)
+            freq, eig = result[0], result[1]
         elif hasattr(phonons, "DiagonalizeQPoint"):
             freq, eig = phonons.DiagonalizeQPoint(qpoint)
         else:
             raise AttributeError(
-                "CellConstructor phonon object has no recognized q-point diagonalizer"
+                "Object has no recognized arbitrary-q phonon evaluator; "
+                "expected ThermalConductivity.get_frequency_at_q"
             )
+
         eig = np.asarray(eig, dtype=complex).copy()
         if eig.shape[0] != 3 * self.dyn.structure.N_atoms:
             eig = eig.T
@@ -157,7 +145,6 @@ class mesolver(_BaseMesolver):
         )
         coarse.mesh = tuple(int(x) for x in self.elph_supercell)
         coarse.shift = (0.0, 0.0, 0.0)
-        # Re-run dataclass validation now that mesh metadata are known.
         coarse.__post_init__()
         return elph_to_real_space(coarse)
 
@@ -183,7 +170,7 @@ class mesolver(_BaseMesolver):
         max_freq = 0.0
         for block in iter_dense_elph_mesh(
             real_space,
-            self.dyn,
+            tc,
             mesh,
             shift=shift,
             block_size=block_size,
@@ -203,7 +190,7 @@ class mesolver(_BaseMesolver):
         non_gamma = 0
         for block in iter_dense_elph_mesh(
             real_space,
-            self.dyn,
+            tc,
             mesh,
             shift=shift,
             block_size=block_size,
