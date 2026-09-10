@@ -9,9 +9,8 @@ legacy solver.
 import numpy as np
 
 import cellconstructor as CC
-from cellconstructor.Units import RY_TO_MEV
 
-from mesolver import mesolver as _BaseMesolver
+from mesolver import mesolver as _BaseMesolver, RY_TO_MEV
 from elph_dense import iter_dense_elph_mesh
 from elph_interpolation import elph_to_real_space
 from elph_symmetry import expand_irreducible_elph
@@ -160,10 +159,7 @@ class mesolver(_BaseMesolver):
         coarse.shift = (0.0, 0.0, 0.0)
         # Re-run dataclass validation now that mesh metadata are known.
         coarse.__post_init__()
-        return elph_to_real_space(
-            coarse,
-            atom_positions=self._fractional_atom_positions(),
-        )
+        return elph_to_real_space(coarse)
 
     def _calculate_a2f_dense_isotropic(
         self,
@@ -184,9 +180,6 @@ class mesolver(_BaseMesolver):
 
         evaluator = phonon_evaluator or self._mass_scaled_phonon_evaluator
 
-        # Establish a safe spectral window from the target mesh without storing
-        # any dense e-ph matrices.  The second streaming pass performs the
-        # actual accumulation.
         max_freq = 0.0
         for block in iter_dense_elph_mesh(
             real_space,
@@ -231,7 +224,6 @@ class mesolver(_BaseMesolver):
                     -0.5 * (self.a2f_omega[None, :] - freq[:, None]) ** 2 / sigma**2
                 ) / (np.sqrt(2.0 * np.pi) * sigma)
 
-                # mode_matrices: (nsmear, nmode, nmode) for the isotropic input.
                 mode_diag = np.diagonal(
                     block.mode_matrices[iloc], axis1=-2, axis2=-1
                 ).real
@@ -251,8 +243,6 @@ class mesolver(_BaseMesolver):
         if non_gamma == 0:
             raise RuntimeError("target interpolation mesh contains no non-Gamma q points")
 
-        # Equal-weight full-grid average, matching the legacy convention that
-        # removes Gamma from the normalization.
         self.a2f /= float(non_gamma)
         self.pdos /= float(non_gamma)
         self.dense_q_weights /= np.sum(self.dense_q_weights)
@@ -286,8 +276,6 @@ class mesolver(_BaseMesolver):
             interpolation_mesh=tuple(int(x) for x in self.elph_supercell),
             validate_symmetry=True,
         )
-        # Frequency windows can differ slightly because the target-q phonons
-        # are evaluated independently.  Compare alpha2F on the common interval.
         common_max = min(reference_omega[-1], self.a2f_omega[-1])
         common = np.linspace(max(reference_omega[0], self.a2f_omega[0]), common_max, nom)
         ref_interp = np.array([np.interp(common, reference_omega, a) for a in reference_a2f])
