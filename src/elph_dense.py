@@ -51,16 +51,22 @@ def evaluate_phonons_at_q(
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Evaluate phonon frequencies/eigenvectors at one fractional q point.
 
-    For a ``ThermalConductivity`` object the preferred path is
-    ``get_frequency_at_q(q)``, which Fourier-interpolates the harmonic force
-    constants to an arbitrary q-vector and returns
-    ``(frequencies, eigenvectors, dynmat)``.  ``DyagDinQ`` is deliberately not
-    used for arbitrary q-vectors because CellConstructor's ``Phonons.DyagDinQ``
-    expects an integer index into the stored q-point list.
+    The q-vector accepted by this public helper is always in fractional
+    reciprocal-lattice coordinates, matching the e-ph interpolation layer.
 
-    A custom ``phonon_evaluator(phonons, qpoint)`` may return either
-    ``(frequencies, eigenvectors)`` or a longer tuple whose first two entries
-    have those meanings.
+    For a ``ThermalConductivity`` object, ``get_frequency_at_q`` expects the
+    corresponding Cartesian reciprocal vector (the same convention as
+    ``tc.k_points``).  Therefore this helper converts
+
+        q_cart = q_fractional @ tc.reciprocal_lattice
+
+    before calling it.  ``DyagDinQ`` is deliberately not used for arbitrary
+    q-vectors because CellConstructor's ``Phonons.DyagDinQ`` expects an integer
+    index into the stored q-point list.
+
+    A custom ``phonon_evaluator(phonons, qpoint)`` receives the original
+    fractional q-vector and may return either ``(frequencies, eigenvectors)``
+    or a longer tuple whose first two entries have those meanings.
     """
     q = np.asarray(qpoint, dtype=float)
     if q.shape != (3,):
@@ -69,7 +75,13 @@ def evaluate_phonons_at_q(
     if phonon_evaluator is not None:
         result = phonon_evaluator(phonons, q)
     elif hasattr(phonons, "get_frequency_at_q"):
-        result = phonons.get_frequency_at_q(q)
+        if not hasattr(phonons, "reciprocal_lattice"):
+            raise AttributeError(
+                "get_frequency_at_q is available but reciprocal_lattice is missing; "
+                "cannot convert fractional q to the expected Cartesian vector"
+            )
+        q_cart = np.dot(q, np.asarray(phonons.reciprocal_lattice, dtype=float))
+        result = phonons.get_frequency_at_q(q_cart)
     elif hasattr(phonons, "DiagonalizeQPoint"):
         result = phonons.DiagonalizeQPoint(q)
     elif hasattr(phonons, "diagonalize_qpoint"):
@@ -126,7 +138,14 @@ def iter_dense_elph_qpoints(
     block_size: int = 64,
     phonon_evaluator: Optional[Callable] = None,
 ) -> Iterator[DenseElphBlock]:
-    """Yield interpolated/projected electron-phonon data in q-point blocks."""
+    """Yield interpolated/projected electron-phonon data in q-point blocks.
+
+    Each ``qpoint`` remains in fractional reciprocal coordinates throughout
+    the e-ph interpolation.  The exact same fractional vector is passed to the
+    phonon-evaluation adapter; the adapter performs any API-specific coordinate
+    conversion internally.  This keeps the e-ph and phonon data locked to the
+    same physical q-point.
+    """
     qpoints = np.asarray(qpoints, dtype=float)
     if qpoints.ndim != 2 or qpoints.shape[1] != 3:
         raise ValueError("qpoints must have shape (nq, 3)")
