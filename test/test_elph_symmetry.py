@@ -102,9 +102,8 @@ def test_extra_axes_between_q_and_matrix_are_supported():
     np.testing.assert_allclose(grid.matrices[1, 1], np.diag([4.0, 3.0]))
 
 
-def test_collision_validator_rejects_inconsistent_symmetry_paths():
+def test_collision_validator_accepts_consistent_duplicate_paths():
     tc = MockTC()
-    # Identity-like scalar matrix is consistent under coordinate exchange.
     source = np.array([np.eye(2, dtype=complex)])
     mappings = build_qpoint_symmetry_map(tc, np.array([[0.25, 0.0, 0.0]]))
     validate_symmetry_collisions(
@@ -115,12 +114,23 @@ def test_collision_validator_rejects_inconsistent_symmetry_paths():
         gamma_builder=gamma_builder,
     )
 
-    # A deliberately incorrect gamma backend makes different paths disagree.
-    def bad_gamma_builder(tc, symmetry_index, qrot_cart):
+
+def test_collision_validator_rejects_inconsistent_duplicate_paths():
+    tc = MockTC()
+    # Add a second identity reciprocal-space operation.  It reaches the same
+    # q-point by a different symmetry path, so the displacement representation
+    # must produce the same transformed matrix.
+    tc.rotations = np.concatenate([tc.rotations, np.eye(3)[None, :, :]], axis=0)
+    source = np.array([np.diag([1.0, 3.0]).astype(complex)])
+    mappings = build_qpoint_symmetry_map(tc, np.array([[0.25, 0.0, 0.0]]))
+
+    def inconsistent_gamma_builder(tc, symmetry_index, qrot_cart):
         del tc, qrot_cart
-        if symmetry_index == 0:
+        if symmetry_index in (0,):
             return np.eye(2)
-        return np.array([[2.0, 0.0], [0.0, 1.0]], dtype=complex)
+        if symmetry_index == 2:
+            return np.array([[0.0, 1.0], [1.0, 0.0]], dtype=complex)
+        return np.array([[0.0, 1.0], [1.0, 0.0]], dtype=complex)
 
     with pytest.raises(RuntimeError, match="Inconsistent symmetry paths"):
         validate_symmetry_collisions(
@@ -128,5 +138,5 @@ def test_collision_validator_rejects_inconsistent_symmetry_paths():
             np.array([[0.25, 0.0, 0.0]]),
             source,
             mappings,
-            gamma_builder=bad_gamma_builder,
+            gamma_builder=inconsistent_gamma_builder,
         )
