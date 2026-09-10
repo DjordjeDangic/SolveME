@@ -1,7 +1,7 @@
 """Dense-q electron-phonon evaluation utilities.
 
 This module connects the Cartesian electron-phonon Fourier interpolator to
-phonon eigenmodes.  The interpolation remains in Cartesian atomic-displacement
+phonon eigenmodes. The interpolation remains in Cartesian atomic-displacement
 space until the target q point is reached; only then is the matrix projected
 onto phonon eigenvectors.
 
@@ -32,14 +32,7 @@ class DenseElphBlock:
 
 
 def _normalize_eigenvectors(eigenvectors: np.ndarray, ndof: int) -> np.ndarray:
-    """Return phonon eigenvectors with shape ``(ndof, nmode)``.
-
-    CellConstructor-like APIs may return either columns or rows as modes.  For
-    a square eigensystem both layouts are mathematically possible, therefore
-    callers may supply an explicit ``phonon_evaluator`` if their convention is
-    not column-major.  The default assumes columns are modes, matching
-    ``numpy.linalg.eigh``.
-    """
+    """Return phonon eigenvectors with shape ``(ndof, nmode)``."""
     pol = np.asarray(eigenvectors, dtype=complex)
     if pol.ndim != 2:
         raise ValueError("phonon eigenvectors must be a 2-D array")
@@ -58,9 +51,16 @@ def evaluate_phonons_at_q(
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Evaluate phonon frequencies/eigenvectors at one fractional q point.
 
-    ``phonon_evaluator`` may be supplied as ``f(phonons, qpoint)`` and must
-    return ``(frequencies, eigenvectors)``.  Without it, a small compatibility
-    adapter tries common CellConstructor-style q-diagonalization methods.
+    For a ``ThermalConductivity`` object the preferred path is
+    ``get_frequency_at_q(q)``, which Fourier-interpolates the harmonic force
+    constants to an arbitrary q-vector and returns
+    ``(frequencies, eigenvectors, dynmat)``.  ``DyagDinQ`` is deliberately not
+    used for arbitrary q-vectors because CellConstructor's ``Phonons.DyagDinQ``
+    expects an integer index into the stored q-point list.
+
+    A custom ``phonon_evaluator(phonons, qpoint)`` may return either
+    ``(frequencies, eigenvectors)`` or a longer tuple whose first two entries
+    have those meanings.
     """
     q = np.asarray(qpoint, dtype=float)
     if q.shape != (3,):
@@ -68,20 +68,20 @@ def evaluate_phonons_at_q(
 
     if phonon_evaluator is not None:
         result = phonon_evaluator(phonons, q)
-    elif hasattr(phonons, "DyagDinQ"):
-        result = phonons.DyagDinQ(q)
+    elif hasattr(phonons, "get_frequency_at_q"):
+        result = phonons.get_frequency_at_q(q)
     elif hasattr(phonons, "DiagonalizeQPoint"):
         result = phonons.DiagonalizeQPoint(q)
     elif hasattr(phonons, "diagonalize_qpoint"):
         result = phonons.diagonalize_qpoint(q)
     else:
         raise AttributeError(
-            "phonon object has no recognized q-point diagonalization method; "
-            "provide phonon_evaluator"
+            "phonon object has no recognized arbitrary-q diagonalization method; "
+            "pass a ThermalConductivity object or provide phonon_evaluator"
         )
 
     if not isinstance(result, (tuple, list)) or len(result) < 2:
-        raise ValueError("phonon evaluator must return (frequencies, eigenvectors)")
+        raise ValueError("phonon evaluator must return at least (frequencies, eigenvectors)")
     frequencies = np.asarray(result[0], dtype=float)
     eigenvectors = np.asarray(result[1], dtype=complex)
     if frequencies.ndim != 1:
@@ -93,15 +93,7 @@ def project_cartesian_to_modes(
     matrices: np.ndarray,
     eigenvectors: np.ndarray,
 ) -> np.ndarray:
-    """Project Cartesian displacement matrices onto phonon eigenmodes.
-
-    For each q point and every optional intermediate axis this computes
-
-        D_mode = E^dagger D_cart E,
-
-    where columns of ``E`` are phonon polarization vectors.  ``matrices`` may
-    have shape ``(..., 3N, 3N)`` and the result has shape ``(..., nm, nm)``.
-    """
+    """Project Cartesian displacement matrices onto phonon eigenmodes."""
     values = np.asarray(matrices, dtype=complex)
     if values.ndim < 2 or values.shape[-1] != values.shape[-2]:
         raise ValueError("Cartesian matrices must have square trailing dimensions")
@@ -134,13 +126,7 @@ def iter_dense_elph_qpoints(
     block_size: int = 64,
     phonon_evaluator: Optional[Callable] = None,
 ) -> Iterator[DenseElphBlock]:
-    """Yield interpolated/projected electron-phonon data in q-point blocks.
-
-    The Cartesian matrices are Fourier-evaluated one block at a time.  Phonons
-    are evaluated q-by-q because their interpolation is delegated to
-    CellConstructor (or a supplied evaluator).  This caps memory approximately
-    at ``block_size`` times the matrix size instead of the complete target grid.
-    """
+    """Yield interpolated/projected electron-phonon data in q-point blocks."""
     qpoints = np.asarray(qpoints, dtype=float)
     if qpoints.ndim != 2 or qpoints.shape[1] != 3:
         raise ValueError("qpoints must have shape (nq, 3)")
@@ -166,9 +152,6 @@ def iter_dense_elph_qpoints(
             eigenvectors.append(pol)
             mode_matrices.append(project_cartesian_to_modes(cart_block[local_i], pol))
 
-        # A regular crystal has the same number of modes at each q point, so
-        # stack to dense arrays and fail clearly if a custom evaluator violates
-        # that expectation.
         try:
             frequency_array = np.stack(frequencies, axis=0)
             eigenvector_array = np.stack(eigenvectors, axis=0)
