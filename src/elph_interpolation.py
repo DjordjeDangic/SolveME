@@ -1,15 +1,18 @@
 """Fourier interpolation of electron-phonon matrices on regular q grids.
 
-The interpolation is performed in a periodic Cartesian displacement gauge.
-For a matrix element connecting Cartesian displacements on atoms kappa and
-kappa', SolveME uses
+The default interpolation convention is the same periodic Bloch displacement
+convention used by CellConstructor's symmetry machinery.  In this convention
+no additional basis-position phase is inserted before the q-to-R transform.
+
+An older/experimental basis-phase conversion remains available explicitly via
+``gauge='basis'``:
 
     D_periodic(q) = exp[-2 pi i q.(tau_kappa - tau_kappa')] D_input(q)
 
-where q and tau are fractional reciprocal/direct coordinates.  The inverse
-phase is restored after Fourier evaluation.  Passing ``atom_positions=None``
-disables this gauge transformation, which is useful for quantities already in
-a periodic gauge or for tests with scalar/mode-independent matrices.
+This is not applied by default because the matrices reconstructed with
+``ThermalConductivity.construct_symmetry_matrix`` already transform in the
+CellConstructor Bloch convention.  Applying a second basis phase can therefore
+double-count the positional phase.
 
 The Fourier convention is
 
@@ -28,6 +31,9 @@ import numpy as np
 from elph_grid import ElphGrid, canonicalize_qpoints, generate_regular_q_grid, mesh_index_lookup
 
 
+VALID_GAUGES = ("cellconstructor", "basis")
+
+
 def _validate_atom_positions(atom_positions: np.ndarray, matrix_size: int) -> np.ndarray:
     tau = np.asarray(atom_positions, dtype=float)
     if tau.ndim != 2 or tau.shape[1] != 3:
@@ -41,12 +47,7 @@ def _validate_atom_positions(atom_positions: np.ndarray, matrix_size: int) -> np
 
 
 def displacement_gauge_phase(qpoint: Sequence[float], atom_positions: np.ndarray) -> np.ndarray:
-    """Return the Cartesian-displacement gauge phase matrix for one q-point.
-
-    The returned matrix has shape ``(3*natom, 3*natom)`` and contains
-    ``exp[-2*pi*i*q.(tau_kappa-tau_kappa')]`` replicated over Cartesian
-    components.
-    """
+    """Return the optional basis-position phase matrix for one q-point."""
     q = np.asarray(qpoint, dtype=float)
     tau = np.asarray(atom_positions, dtype=float)
     if q.shape != (3,):
@@ -64,7 +65,7 @@ def to_periodic_gauge(
     qpoints: np.ndarray,
     atom_positions: Optional[np.ndarray],
 ) -> np.ndarray:
-    """Convert displacement-space matrices to the periodic Fourier gauge."""
+    """Apply the optional legacy basis-position phase conversion."""
     values = np.asarray(matrices, dtype=complex)
     qpoints = np.asarray(qpoints, dtype=float)
     if values.shape[0] != len(qpoints):
@@ -86,7 +87,7 @@ def from_periodic_gauge(
     qpoints: np.ndarray,
     atom_positions: Optional[np.ndarray],
 ) -> np.ndarray:
-    """Restore SolveME's input displacement gauge after Fourier evaluation."""
+    """Undo the optional legacy basis-position phase conversion."""
     values = np.asarray(matrices, dtype=complex)
     qpoints = np.asarray(qpoints, dtype=float)
     if values.shape[0] != len(qpoints):
@@ -131,6 +132,7 @@ class ElphRealSpace:
     mesh: Tuple[int, int, int]
     shift: Tuple[float, float, float] = (0.0, 0.0, 0.0)
     atom_positions: Optional[np.ndarray] = None
+    gauge: str = "cellconstructor"
 
     def __post_init__(self):
         self.mesh = tuple(int(n) for n in self.mesh)
@@ -138,6 +140,8 @@ class ElphRealSpace:
         self.matrices = np.asarray(self.matrices, dtype=complex)
         if self.matrices.shape[:3] != self.mesh:
             raise ValueError("real-space matrix leading dimensions must equal mesh")
+        if self.gauge not in VALID_GAUGES:
+            raise ValueError("gauge must be one of %s" % (VALID_GAUGES,))
         if self.atom_positions is not None:
             self.atom_positions = np.asarray(self.atom_positions, dtype=float)
 
@@ -149,15 +153,23 @@ class ElphRealSpace:
 def elph_to_real_space(
     grid: ElphGrid,
     atom_positions: Optional[np.ndarray] = None,
+    gauge: str = "cellconstructor",
 ) -> ElphRealSpace:
     """Transform a complete coarse q grid to real space.
 
-    ``atom_positions`` must be fractional direct coordinates when supplied.
+    ``gauge='cellconstructor'`` is the default and applies no extra basis phase.
+    ``gauge='basis'`` enables the older explicit basis-position conversion and
+    requires fractional direct ``atom_positions``.
     """
     if grid.mesh is None:
         raise ValueError("grid.mesh is required for a q-to-R transform")
+    if gauge not in VALID_GAUGES:
+        raise ValueError("gauge must be one of %s" % (VALID_GAUGES,))
+    if gauge == "basis" and atom_positions is None:
+        raise ValueError("atom_positions are required when gauge='basis'")
 
-    periodic = to_periodic_gauge(grid.matrices, grid.qpoints, atom_positions)
+    gauge_positions = atom_positions if gauge == "basis" else None
+    periodic = to_periodic_gauge(grid.matrices, grid.qpoints, gauge_positions)
     periodic_grid = ElphGrid(
         qpoints=grid.qpoints,
         matrices=periodic,
@@ -168,7 +180,6 @@ def elph_to_real_space(
     nq = float(np.prod(grid.mesh))
     d_r = np.fft.fftn(ordered, axes=(0, 1, 2)) / nq
 
-    # q_i = (i+s)/N gives an additional exp[-2*pi*i*s.R/N] factor.
     r = real_space_vectors(grid.mesh)
     shift = np.asarray(grid.shift, dtype=float)
     mesh = np.asarray(grid.mesh, dtype=float)
@@ -179,7 +190,8 @@ def elph_to_real_space(
         matrices=d_r,
         mesh=grid.mesh,
         shift=grid.shift,
-        atom_positions=atom_positions,
+        atom_positions=gauge_positions,
+        gauge=gauge,
     )
 
 
@@ -200,7 +212,7 @@ def evaluate_real_space(
     phase = np.exp(2.0j * np.pi * np.einsum("qd,rd->qr", qpoints, r))
     periodic = np.einsum("qr,r...->q...", phase, d_r, optimize=True)
 
-    if restore_gauge:
+    if restore_gauge and real_space.gauge == "basis":
         return from_periodic_gauge(periodic, qpoints, real_space.atom_positions)
     return periodic
 
@@ -226,7 +238,12 @@ def fourier_interpolate_elph(
     target_mesh: Sequence[int],
     target_shift: Sequence[float] = (0.0, 0.0, 0.0),
     atom_positions: Optional[np.ndarray] = None,
+    gauge: str = "cellconstructor",
 ) -> ElphGrid:
     """Convenience q-grid -> real-space -> dense-q interpolation pipeline."""
-    real_space = elph_to_real_space(coarse_grid, atom_positions=atom_positions)
+    real_space = elph_to_real_space(
+        coarse_grid,
+        atom_positions=atom_positions,
+        gauge=gauge,
+    )
     return interpolate_elph(real_space, target_mesh, target_shift)

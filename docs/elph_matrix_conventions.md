@@ -26,25 +26,27 @@ The electron-phonon matrix transforms as
 
 If the target point is reached through time reversal, the transformed matrix is complex conjugated. Reciprocal-lattice shifts used to bring a transformed point onto the stored q-grid are retained in `QPointMapping`.
 
+CellConstructor's `construct_symmetry_matrix` already contains the Bloch phase associated with the lattice translation required to map one basis atom onto another. Therefore the symmetry-expanded matrices are treated as being in the same periodic Bloch displacement convention as CellConstructor dynamical matrices.
+
 ## Fourier interpolation gauge
 
-Fourier interpolation is carried out in a periodic Cartesian displacement gauge. Let `tau_kappa` be the fractional direct-lattice coordinate of atom `kappa`. For matrix elements connecting Cartesian displacements on atoms `kappa` and `kappa'`, `elph_interpolation.py` defines
+The default Fourier interpolation gauge is now `cellconstructor`. In this mode **no additional basis-position phase is applied** before the q-to-R transform. This avoids double-counting the positional Bloch phase already implicit in the displacement convention used by `ThermalConductivity.construct_symmetry_matrix`.
+
+The older explicit basis-position conversion remains available only by requesting `gauge='basis'`. It applies
 
 `D_periodic(kappa alpha, kappa' beta; q) = exp[-2*pi*i*q.(tau_kappa - tau_kappa')] D_input(kappa alpha, kappa' beta; q)`.
 
-The inverse phase is restored after evaluating the Fourier series at a target q-point. `atom_positions` must therefore be supplied in fractional direct coordinates. Passing `atom_positions=None` intentionally disables the gauge conversion for data that are already periodic or for scalar/test quantities.
-
-This convention is explicit and unit-tested, but the physical interface to a particular external electron-phonon file format must still be checked against that producer's phase convention before using interpolated values for production calculations. In particular, if Quantum ESPRESSO/EPW input matrices are later shown to already include/remove the basis-position phase differently, only the two gauge-conversion functions should need to change; the FFT and symmetry layers remain independent.
+That mode should be considered experimental/format-specific and should only be used if an external producer is independently shown to require this additional conversion.
 
 ## Fourier transform convention
 
-For a complete regular coarse mesh, the real-space representation is
+For a complete regular coarse mesh in the default CellConstructor gauge, the real-space representation is
 
-`D(R) = (1/Nq) sum_q D_periodic(q) exp[-2*pi*i*q.R]`
+`D(R) = (1/Nq) sum_q D(q) exp[-2*pi*i*q.R]`
 
 and reconstruction/interpolation is
 
-`D_periodic(q) = sum_R D(R) exp[+2*pi*i*q.R]`.
+`D(q) = sum_R D(R) exp[+2*pi*i*q.R]`.
 
 `R` is an integer Born-von-Karman lattice vector represented in signed FFT ordering. Shifted q meshes include the corresponding analytic phase factor so that a q->R->q round trip is exact on the original mesh.
 
@@ -54,4 +56,6 @@ The implementation first reorders q-points by integer mesh coordinates, performs
 
 The symmetry layer must satisfy identity mapping, q-star coverage, time reversal, deterministic selection when several operations reach the same q-point, and equality of matrices obtained through different valid symmetry paths. The last condition is checked by `validate_symmetry_collisions` and is intended primarily for tests and debugging.
 
-The Fourier layer must satisfy: gauge conversion followed by inverse conversion recovers the original matrices; q->R->q reproduces every coarse-grid matrix; shifted meshes round-trip exactly; and interpolation onto a commensurate denser mesh reproduces the original values at every coarse q-point contained in the fine mesh.
+The coarse-grid dynamical matrices can now be independently checked with `symmetry_validation.validate_dynamical_matrix_symmetry`. The primary test compares full dynamical matrices under `Gamma D Gamma^dagger`, so it is unaffected by eigenvector phases or rotations within degenerate subspaces. A secondary eigenspace diagnostic groups nearly degenerate eigenvalues and compares projectors rather than individual eigenvectors.
+
+The Fourier layer must satisfy: q->R->q reproduces every coarse-grid matrix; shifted meshes round-trip exactly; and interpolation onto a commensurate denser mesh reproduces the original values at every coarse q-point contained in the fine mesh.
