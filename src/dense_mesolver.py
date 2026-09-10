@@ -112,13 +112,17 @@ class mesolver(_BaseMesolver):
     def _mass_scaled_phonon_evaluator(self, phonons, qpoint):
         """Evaluate arbitrary-q phonons and reproduce SolveME's mass scaling.
 
-        The dense path passes a ThermalConductivity object here. Its
-        ``get_frequency_at_q`` method is the CellConstructor API intended for
-        arbitrary q-vectors; ``Phonons.DyagDinQ`` instead expects an integer
-        index into an already stored q list and must not be used here.
+        The dense e-ph machinery uses fractional reciprocal coordinates.  A
+        ThermalConductivity object stores the corresponding Cartesian vectors as
+        ``k_points = qpoints @ reciprocal_lattice`` and ``get_frequency_at_q``
+        expects that Cartesian convention, so convert before evaluating phonons.
         """
         if hasattr(phonons, "get_frequency_at_q"):
-            result = phonons.get_frequency_at_q(qpoint)
+            q_cart = np.dot(
+                np.asarray(qpoint, dtype=float),
+                np.asarray(phonons.reciprocal_lattice, dtype=float),
+            )
+            result = phonons.get_frequency_at_q(q_cart)
             freq, eig = result[0], result[1]
         elif hasattr(phonons, "DiagonalizeQPoint"):
             freq, eig = phonons.DiagonalizeQPoint(qpoint)
