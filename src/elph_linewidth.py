@@ -100,6 +100,7 @@ def calculate_solver_linewidth_path(
     a2f_smearing: float = 0.5,
     block_size: int = 64,
     validate_symmetry: bool = True,
+    elph_inverse_symmetry: bool = False,
     frequency_tol: float = 1.0e-12,
     degeneracy_atol: float = 1.0e-8,
     degeneracy_rtol: float = 1.0e-5,
@@ -122,6 +123,11 @@ def calculate_solver_linewidth_path(
     validate_symmetry
         Run dynamical-matrix and electron-phonon symmetry validation before
         interpolation. Enabled by default; set False only to bypass diagnostics.
+    elph_inverse_symmetry
+        Experimental e-ph-only convention switch. When True, the e-ph Gamma for
+        a mapping labelled by S is built from the CellConstructor data for S^-1.
+        The dynamical-matrix symmetry validation remains on the normal
+        CellConstructor convention and is not affected by this flag.
     degeneracy_atol, degeneracy_rtol
         Frequency tolerances for grouping degenerate/near-degenerate phonons.
 
@@ -138,7 +144,11 @@ def calculate_solver_linewidth_path(
         raise IndexError("smear_id is outside the available electron-phonon smearings")
 
     tc = solver._build_coarse_tc(scattering_mesh, a2f_smearing)
-    real_space = solver._prepare_dense_real_space(tc, validate_symmetry)
+    real_space = solver._prepare_dense_real_space(
+        tc,
+        validate_symmetry,
+        elph_inverse_symmetry=elph_inverse_symmetry,
+    )
     qfrac = _as_fractional_qpoints(tc, qpoints, coordinates)
 
     frequencies = []
