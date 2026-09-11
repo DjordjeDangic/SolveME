@@ -99,7 +99,7 @@ def calculate_solver_linewidth_path(
     scattering_mesh=(10, 10, 10),
     a2f_smearing: float = 0.5,
     block_size: int = 64,
-    validate_symmetry: bool = False,
+    validate_symmetry: bool = True,
     frequency_tol: float = 1.0e-12,
     degeneracy_atol: float = 1.0e-8,
     degeneracy_rtol: float = 1.0e-5,
@@ -119,6 +119,9 @@ def calculate_solver_linewidth_path(
         reciprocal coordinates.
     smear_id
         Electronic smearing/DOS index used for the deformation matrix and DOS.
+    validate_symmetry
+        Run dynamical-matrix and electron-phonon symmetry validation before
+        interpolation. Enabled by default; set False only to bypass diagnostics.
     degeneracy_atol, degeneracy_rtol
         Frequency tolerances for grouping degenerate/near-degenerate phonons.
 
