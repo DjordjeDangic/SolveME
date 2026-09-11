@@ -41,6 +41,7 @@ class mesolver(_BaseMesolver):
         interpolation_block_size=64,
         validate_symmetry=True,
         elph_inverse_symmetry=False,
+        elph_reciprocal_gauge=False,
         phonon_evaluator=None,
     ):
         """Calculate alpha2F, optionally on a Fourier-interpolated q mesh.
@@ -55,6 +56,12 @@ class mesolver(_BaseMesolver):
         e-ph Gamma matrix is constructed from the matching inverse operation
         S^-1 while keeping the target-q phase argument fixed. The dynamical-
         matrix symmetry validator is deliberately not affected by this flag.
+
+        ``elph_reciprocal_gauge=True`` converts each reconstructed e-ph matrix
+        from the unreduced q_target+G Bloch gauge into the reduced target-q
+        gauge using the mapping's integer reciprocal shift G before collision
+        validation and Fourier interpolation. This is also e-ph-only and does
+        not modify dynamical-matrix validation.
         """
         if interpolation_mesh is None:
             if validate_symmetry:
@@ -110,6 +117,7 @@ class mesolver(_BaseMesolver):
             a2f_smearing=a2f_smearing,
             validate_symmetry=validate_symmetry,
             elph_inverse_symmetry=elph_inverse_symmetry,
+            elph_reciprocal_gauge=elph_reciprocal_gauge,
             phonon_evaluator=phonon_evaluator,
         )
 
@@ -186,7 +194,7 @@ class mesolver(_BaseMesolver):
         This constructs the same harmonic ``ThermalConductivity`` object used by
         ``calculate_a2f`` and checks every symmetry-related q-point pair using
         the standard CellConstructor Gamma convention. The experimental e-ph
-        inverse-operation flag is intentionally irrelevant here.
+        convention flags are intentionally irrelevant here.
         """
         tc = self._build_coarse_tc(
             scattering_mesh,
@@ -241,7 +249,7 @@ class mesolver(_BaseMesolver):
     def _mass_scaled_phonon_evaluator(self, phonons, qpoint):
         """Evaluate arbitrary-q phonons and reproduce SolveME's mass scaling.
 
-        The dense e-ph machinery uses fractional reciprocal coordinates.  A
+        The dense e-ph machinery uses fractional reciprocal coordinates. A
         ThermalConductivity object stores the corresponding Cartesian vectors as
         ``k_points = qpoints @ reciprocal_lattice`` and ``get_frequency_at_q``
         expects that Cartesian convention, so convert before evaluating phonons.
@@ -273,12 +281,10 @@ class mesolver(_BaseMesolver):
         tc,
         validate_symmetry=True,
         elph_inverse_symmetry=False,
+        elph_reciprocal_gauge=False,
     ):
         """Expand the irreducible coarse e-ph grid and Fourier transform it."""
         if validate_symmetry:
-            # Always validate CellConstructor dynamical matrices with the
-            # standard CellConstructor convention, independent of any e-ph-only
-            # experimental symmetry switch.
             self._run_dynamical_symmetry_validation(tc)
 
         gamma_builder = None
@@ -291,11 +297,13 @@ class mesolver(_BaseMesolver):
             self.ep_deformation_potentials,
             gamma_builder=gamma_builder,
             validate_collisions=validate_symmetry,
+            reciprocal_gauge=elph_reciprocal_gauge,
         )
         coarse.mesh = tuple(int(x) for x in self.elph_supercell)
         coarse.shift = (0.0, 0.0, 0.0)
         coarse.__post_init__()
         self.elph_inverse_symmetry = bool(elph_inverse_symmetry)
+        self.elph_reciprocal_gauge = bool(elph_reciprocal_gauge)
         return elph_to_real_space(coarse)
 
     def _calculate_a2f_dense_isotropic(
@@ -308,6 +316,7 @@ class mesolver(_BaseMesolver):
         a2f_smearing,
         validate_symmetry,
         elph_inverse_symmetry,
+        elph_reciprocal_gauge,
         phonon_evaluator,
     ):
         tc = self._build_coarse_tc(scattering_mesh, a2f_smearing)
@@ -315,6 +324,7 @@ class mesolver(_BaseMesolver):
             tc,
             validate_symmetry,
             elph_inverse_symmetry=elph_inverse_symmetry,
+            elph_reciprocal_gauge=elph_reciprocal_gauge,
         )
         mesh = tuple(int(x) for x in mesh)
         nq = int(np.prod(mesh))
