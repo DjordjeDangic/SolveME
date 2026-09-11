@@ -5,7 +5,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from elph_linewidth import PhononLinewidthPath
+from elph_linewidth import PhononLinewidthPath, _degeneracy_safe_mode_deformation
 
 
 def test_fwhm_property_is_twice_hwhm():
@@ -20,7 +20,7 @@ def test_fwhm_property_is_twice_hwhm():
 
 
 def test_epw_eq25_matches_solvemode_lambda_identity():
-    # SolveME uses lambda = M / (2 N_F omega^2).  Combining this with
+    # SolveME uses lambda = M / (2 N_F omega^2). Combining this with
     # EPW Eq. 25 gives gamma = pi M / 2 (hbar=1 in native energy units).
     deformation = np.array([0.04, 0.11, 0.20])
     omega = np.array([0.03, 0.07, 0.15])
@@ -31,3 +31,24 @@ def test_epw_eq25_matches_solvemode_lambda_identity():
     reconstructed = gamma / (np.pi * dos * omega**2)
 
     np.testing.assert_allclose(reconstructed, lam)
+
+
+def test_degenerate_subspace_is_basis_invariant():
+    freq = np.array([1.0, 1.0, 2.0])
+    coupling = np.array(
+        [[2.0, 0.5, 0.0], [0.5, 4.0, 0.0], [0.0, 0.0, 7.0]], dtype=complex
+    )
+    expected_pair = np.linalg.eigvalsh(coupling[:2, :2])
+
+    angle = 0.37
+    rot = np.array(
+        [[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]]
+    )
+    transformed = coupling.copy()
+    transformed[:2, :2] = rot.T @ coupling[:2, :2] @ rot
+
+    values = _degeneracy_safe_mode_deformation(
+        transformed, freq, atol=1.0e-10, rtol=1.0e-10
+    )
+    np.testing.assert_allclose(values[:2], expected_pair)
+    np.testing.assert_allclose(values[2], 7.0)
