@@ -3,7 +3,7 @@
 This module keeps the existing :class:`mesolver.mesolver` implementation
 unchanged and layers the dense-q harmonic path on top of it. Calling
 ``calculate_a2f`` without ``interpolation_mesh`` delegates exactly to the
-legacy solver.
+legacy solver, with symmetry validation performed first by default.
 """
 
 import numpy as np
@@ -14,6 +14,10 @@ from mesolver import mesolver as _BaseMesolver, RY_TO_MEV
 from elph_dense import iter_dense_elph_mesh
 from elph_interpolation import elph_to_real_space
 from elph_symmetry import expand_irreducible_elph
+from symmetry_validation import (
+    summarize_dynamical_symmetry_checks,
+    validate_dynamical_matrix_symmetry,
+)
 
 
 class mesolver(_BaseMesolver):
@@ -35,11 +39,25 @@ class mesolver(_BaseMesolver):
         interpolation_mesh=None,
         interpolation_shift=(0.0, 0.0, 0.0),
         interpolation_block_size=64,
-        validate_symmetry=False,
+        validate_symmetry=True,
         phonon_evaluator=None,
     ):
-        """Calculate alpha2F, optionally on a Fourier-interpolated q mesh."""
+        """Calculate alpha2F, optionally on a Fourier-interpolated q mesh.
+
+        Symmetry validation is enabled by default. The same dynamical-matrix
+        covariance check is run in both the legacy irreducible-grid path and
+        the dense-q interpolation path. The dense path additionally validates
+        the e-ph symmetry reconstruction before Fourier interpolation.
+        """
         if interpolation_mesh is None:
+            if validate_symmetry:
+                tc_validation = self._build_coarse_tc(
+                    scattering_mesh,
+                    a2f_smearing,
+                    automatic_a2f_smearing=automatic_a2f_smearing,
+                )
+                self._run_dynamical_symmetry_validation(tc_validation)
+
             return super().calculate_a2f(
                 anharmonic=anharmonic,
                 comm_dyn_filename=comm_dyn_filename,
@@ -87,22 +105,86 @@ class mesolver(_BaseMesolver):
             phonon_evaluator=phonon_evaluator,
         )
 
-    def _build_coarse_tc(self, scattering_mesh, a2f_smearing):
+    def _build_coarse_tc(
+        self,
+        scattering_mesh,
+        a2f_smearing,
+        automatic_a2f_smearing=False,
+    ):
         """Build the same harmonic TC object used by the legacy a2F path."""
         _, fc3 = self._build_fc3(False, None, 1, None)
-        tc = CC.ThermalConductivity.ThermalConductivity(
-            self.dyn,
-            fc3,
-            kpoint_grid=self.elph_supercell,
-            scattering_grid=scattering_mesh,
-            smearing_scale=None,
-            smearing_type="constant",
-            cp_mode="quantum",
-            off_diag=False,
-            phase_conv="step",
-        )
-        tc.setup_harmonic_properties(a2f_smearing)
+
+        if automatic_a2f_smearing:
+            tc = CC.ThermalConductivity.ThermalConductivity(
+                self.dyn,
+                fc3,
+                kpoint_grid=self.elph_supercell,
+                scattering_grid=scattering_mesh,
+                smearing_scale=1.0,
+                smearing_type="adaptive",
+                cp_mode="quantum",
+                off_diag=False,
+                phase_conv="step",
+            )
+            tc.setup_harmonic_properties()
+        else:
+            tc = CC.ThermalConductivity.ThermalConductivity(
+                self.dyn,
+                fc3,
+                kpoint_grid=self.elph_supercell,
+                scattering_grid=scattering_mesh,
+                smearing_scale=None,
+                smearing_type="constant",
+                cp_mode="quantum",
+                off_diag=False,
+                phase_conv="step",
+            )
+            tc.setup_harmonic_properties(a2f_smearing)
+
         return tc
+
+    def _run_dynamical_symmetry_validation(self, tc):
+        """Validate D(Sq)=Gamma D(q) Gamma^dagger using the active TC object."""
+        checks = validate_dynamical_matrix_symmetry(tc, raise_on_failure=True)
+        summary = summarize_dynamical_symmetry_checks(checks)
+        self.last_dynamical_symmetry_checks = checks
+        self.last_dynamical_symmetry_summary = summary
+
+        print("Dynamical-matrix symmetry validation passed:")
+        print("  mappings checked             =", summary["nchecks"])
+        print("  failed mappings              =", summary["nfailed"])
+        print(
+            "  max matrix relative error    = %.3e"
+            % summary["max_matrix_relative_error"]
+        )
+        print(
+            "  max eigenvalue relative error= %.3e"
+            % summary["max_eigenvalue_relative_error"]
+        )
+        print(
+            "  max degenerate-subspace error= %.3e"
+            % summary["max_subspace_error"]
+        )
+        return checks
+
+    def validate_dynamical_symmetry(
+        self,
+        scattering_mesh=(10, 10, 10),
+        a2f_smearing=0.5,
+        automatic_a2f_smearing=False,
+    ):
+        """Public diagnostic for the CellConstructor dynamical-matrix symmetry.
+
+        This constructs the same harmonic ``ThermalConductivity`` object used by
+        ``calculate_a2f`` and checks every symmetry-related q-point pair using
+        the exact same Gamma builder used for the e-ph reconstruction.
+        """
+        tc = self._build_coarse_tc(
+            scattering_mesh,
+            a2f_smearing,
+            automatic_a2f_smearing=automatic_a2f_smearing,
+        )
+        return self._run_dynamical_symmetry_validation(tc)
 
     def _fractional_atom_positions(self):
         cell = np.asarray(self.dyn.structure.unit_cell, dtype=float)
@@ -139,8 +221,11 @@ class mesolver(_BaseMesolver):
             eig[3 * iat : 3 * (iat + 1), :] /= np.sqrt(self.dyn.structure.masses[at])
         return np.asarray(freq, dtype=float), eig
 
-    def _prepare_dense_real_space(self, tc, validate_symmetry=False):
+    def _prepare_dense_real_space(self, tc, validate_symmetry=True):
         """Expand the irreducible coarse e-ph grid and Fourier transform it."""
+        if validate_symmetry:
+            self._run_dynamical_symmetry_validation(tc)
+
         coarse = expand_irreducible_elph(
             tc,
             self.elph_qpts,

@@ -2,7 +2,7 @@
 
 The transformation convention follows the pre-existing SolveME implementation:
 for a unitary space-group operation S, a Cartesian displacement-space matrix is
-transformed as Gamma(S,q) D(q) Gamma(S,q)^dagger.  Mapping through -S q uses
+transformed as Gamma(S,q) D(q) Gamma(S,q)^dagger. Mapping through -S q uses
 the complex-conjugated transformed matrix (time reversal).
 
 The module intentionally does not implement Fourier interpolation; it only
@@ -35,23 +35,80 @@ def _find_qpoint(qpoint, qpoints, tol=DEFAULT_Q_TOL):
     return None
 
 
+def match_irreducible_qpoints_to_tc(tc, irred_qpoints, tol=DEFAULT_Q_TOL):
+    """Match each input irreducible e-ph q point to one unique ``tc.qpoints`` index.
+
+    Matching is purely geometric and never relies on array ordering. Two points
+    are considered identical when they differ by an integer reciprocal-lattice
+    vector within ``tol``.
+
+    Returns
+    -------
+    numpy.ndarray
+        Integer array ``matched[iirr] = itc``.
+    """
+    irred = canonicalize_qpoints(irred_qpoints)
+    full = canonicalize_qpoints(tc.qpoints)
+    matched = np.empty(len(irred), dtype=int)
+    used = {}
+
+    for iirr, q in enumerate(irred):
+        candidates = [
+            itc for itc, qtc in enumerate(full)
+            if equivalent_qpoints(q, qtc, tol)
+        ]
+        if len(candidates) == 0:
+            distances = np.array([
+                np.linalg.norm(_periodic_difference(q, qtc)) for qtc in full
+            ])
+            nearest = int(np.argmin(distances))
+            raise RuntimeError(
+                "Electron-phonon irreducible q-point %d %s does not match any "
+                "CellConstructor q-point within %.1e. Nearest is tc.qpoints[%d]="
+                "%s with periodic distance %.3e"
+                % (iirr, np.asarray(q), tol, nearest, full[nearest], distances[nearest])
+            )
+        if len(candidates) > 1:
+            raise RuntimeError(
+                "Electron-phonon irreducible q-point %d %s matches multiple "
+                "CellConstructor q-points %s; the CC full grid is not unique modulo G"
+                % (iirr, np.asarray(q), candidates)
+            )
+
+        itc = candidates[0]
+        if itc in used:
+            raise RuntimeError(
+                "Electron-phonon irreducible q-points %d and %d both match "
+                "tc.qpoints[%d]=%s. The input irreducible q list contains duplicate "
+                "points modulo reciprocal lattice vectors."
+                % (used[itc], iirr, itc, full[itc])
+            )
+        used[itc] = iirr
+        matched[iirr] = itc
+
+    return matched
+
+
 def build_qpoint_symmetry_map(tc, irred_qpoints, tol=DEFAULT_Q_TOL) -> List[QPointMapping]:
     """Map every q-point in ``tc.qpoints`` to an irreducible e-ph q-point.
 
-    The method uses the same reciprocal-space rotations as the legacy
-    ``mesolver.get_elph_on_full_grid`` implementation and records whether time
-    reversal is needed.  A reciprocal-lattice shift is retained explicitly for
-    future phase/gauge handling.
+    First, every input irreducible e-ph q point is matched one-to-one to the
+    CellConstructor full q grid by coordinate. The matched ``tc.qpoints`` values
+    are then used as the symmetry sources. Thus the reconstruction never assumes
+    the input q points and the CellConstructor q points have the same ordering.
     """
     irred_qpoints = canonicalize_qpoints(irred_qpoints)
     full_qpoints = canonicalize_qpoints(tc.qpoints)
-    mappings: List[Optional[QPointMapping]] = [None] * len(full_qpoints)
 
+    matched_tc_indices = match_irreducible_qpoints_to_tc(tc, irred_qpoints, tol)
+    source_qpoints = full_qpoints[matched_tc_indices]
+
+    mappings: List[Optional[QPointMapping]] = [None] * len(full_qpoints)
     rotations = np.asarray(tc.rotations)
 
     for ifull, qtarget in enumerate(full_qpoints):
         candidates = []
-        for iirr, qsource in enumerate(irred_qpoints):
+        for iirr, qsource in enumerate(source_qpoints):
             diff = np.asarray(qsource) - np.asarray(qtarget)
             G = np.rint(diff).astype(int)
             if np.linalg.norm(diff - G) < tol:
@@ -77,8 +134,9 @@ def build_qpoint_symmetry_map(tc, irred_qpoints, tol=DEFAULT_Q_TOL) -> List[QPoi
 
         if not candidates:
             raise RuntimeError(
-                "Could not map full-grid q-point %s to any irreducible q-point"
-                % np.asarray(qtarget)
+                "Could not map CellConstructor full-grid q-point %d %s to any "
+                "matched irreducible e-ph q-point"
+                % (ifull, np.asarray(qtarget))
             )
 
         candidates.sort(
@@ -120,6 +178,9 @@ def construct_gamma_cache(
 
     cache: Dict[Tuple[int, int], np.ndarray] = {}
     irred_qpoints = np.asarray(irred_qpoints, dtype=float)
+    matched_tc_indices = match_irreducible_qpoints_to_tc(tc, irred_qpoints)
+    source_qpoints = canonicalize_qpoints(tc.qpoints)[matched_tc_indices]
+
     for mapping in mappings:
         if mapping.symmetry_index is None:
             continue
@@ -127,7 +188,7 @@ def construct_gamma_cache(
         if key in cache:
             continue
         rotation = np.asarray(tc.rotations[mapping.symmetry_index])
-        qrot_frac = np.dot(rotation.T, irred_qpoints[mapping.irred_index])
+        qrot_frac = np.dot(rotation.T, source_qpoints[mapping.irred_index])
         qrot_cart = np.dot(qrot_frac, tc.reciprocal_lattice)
         cache[key] = gamma_builder(tc, mapping.symmetry_index, qrot_cart)
     return cache
@@ -155,17 +216,17 @@ def expand_irreducible_elph(
     validate_collisions: bool = False,
     collision_tol: float = 1.0e-7,
 ) -> ElphGrid:
-    """Reconstruct a full coarse q-grid from irreducible e-ph matrices.
-
-    ``elph`` may contain arbitrary axes between q and the final two Cartesian
-    displacement axes.  The first dimension must match ``irred_qpoints``.
-    """
+    """Reconstruct a full coarse q-grid from irreducible e-ph matrices."""
     irred_qpoints = np.asarray(irred_qpoints, dtype=float)
     elph = np.asarray(elph)
     if elph.shape[0] != len(irred_qpoints):
         raise ValueError("elph and irred_qpoints must have the same leading dimension")
     if elph.ndim < 3 or elph.shape[-1] != elph.shape[-2]:
         raise ValueError("e-ph matrices must have square trailing matrix axes")
+
+    # Always enforce the explicit one-to-one source-grid match, even when a
+    # precomputed symmetry mapping is supplied.
+    match_irreducible_qpoints_to_tc(tc, irred_qpoints)
 
     if mappings is None:
         mappings = build_qpoint_symmetry_map(tc, irred_qpoints)
@@ -205,21 +266,13 @@ def validate_symmetry_collisions(
     gamma_builder=None,
     tol=1.0e-7,
 ):
-    """Check alternate symmetry paths from the selected irreducible source.
-
-    For each target q-point, the production mapping first selects one
-    irreducible representative.  Validation must therefore compare alternate
-    symmetry operations that start from that *same* representative.  Mixing
-    paths from different irreducible input points can spuriously compare data
-    that are independent representatives in the input file and was the source
-    of false collision failures in real calculations.
-
-    This expensive diagnostic is intended for tests/debugging rather than the
-    production hot path.
-    """
+    """Check alternate symmetry paths from the selected irreducible source."""
     rotations = np.asarray(tc.rotations)
     irred_qpoints = np.asarray(irred_qpoints, dtype=float)
-    full_qpoints = np.asarray(tc.qpoints, dtype=float)
+    full_qpoints = canonicalize_qpoints(tc.qpoints)
+    matched_tc_indices = match_irreducible_qpoints_to_tc(tc, irred_qpoints)
+    source_qpoints = full_qpoints[matched_tc_indices]
+
     if gamma_builder is None:
         gamma_builder = _default_gamma_builder
 
@@ -241,7 +294,7 @@ def validate_symmetry_collisions(
     for target_index, qtarget in enumerate(full_qpoints):
         preferred = preferred_mappings[target_index]
         iirr = preferred.irred_index
-        qsource = irred_qpoints[iirr]
+        qsource = source_qpoints[iirr]
 
         preferred_gamma = get_gamma(iirr, preferred.symmetry_index, qsource)
         reference = transform_elph_matrix(
@@ -265,13 +318,16 @@ def validate_symmetry_collisions(
             error = float(np.linalg.norm(value - reference)) / scale
             if error > tol:
                 raise RuntimeError(
-                    "Inconsistent symmetry paths for q-point %d from irreducible "
-                    "point %d: relative error %.3e (preferred symmetry=%s, "
-                    "preferred time_reversal=%s; alternate symmetry=%s, "
-                    "alternate time_reversal=%s)"
+                    "Inconsistent symmetry paths for tc.qpoints[%d]=%s from matched "
+                    "e-ph irreducible point %d=%s (matched tc index %d): relative "
+                    "error %.3e (preferred symmetry=%s, preferred TR=%s; alternate "
+                    "symmetry=%s, alternate TR=%s)"
                     % (
                         target_index,
+                        qtarget,
                         iirr,
+                        irred_qpoints[iirr],
+                        matched_tc_indices[iirr],
                         error,
                         str(preferred.symmetry_index),
                         str(preferred.time_reversal),
@@ -282,13 +338,7 @@ def validate_symmetry_collisions(
 
 
 def get_elph_on_full_grid(tc, elph, tc_qpt_id, star_id):
-    """Backward-compatible wrapper for the legacy SolveME API.
-
-    ``tc_qpt_id`` identifies the full-grid representative corresponding to each
-    irreducible e-ph matrix.  ``star_id`` is retained for API compatibility but
-    is no longer required because the mapping is derived directly from q-points
-    and symmetry operations.
-    """
+    """Backward-compatible wrapper for the legacy SolveME API."""
     del star_id
     irred_qpoints = np.asarray([tc.qpoints[i] for i in tc_qpt_id], dtype=float)
     return expand_irreducible_elph(tc, irred_qpoints, elph).matrices
