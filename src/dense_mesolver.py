@@ -40,6 +40,7 @@ class mesolver(_BaseMesolver):
         interpolation_shift=(0.0, 0.0, 0.0),
         interpolation_block_size=64,
         validate_symmetry=True,
+        elph_inverse_symmetry=False,
         phonon_evaluator=None,
     ):
         """Calculate alpha2F, optionally on a Fourier-interpolated q mesh.
@@ -48,6 +49,12 @@ class mesolver(_BaseMesolver):
         covariance check is run in both the legacy irreducible-grid path and
         the dense-q interpolation path. The dense path additionally validates
         the e-ph symmetry reconstruction before Fourier interpolation.
+
+        ``elph_inverse_symmetry=True`` is an experimental e-ph-only convention
+        switch. For a q mapping labelled by a CellConstructor symmetry S, the
+        e-ph Gamma matrix is constructed from the matching inverse operation
+        S^-1 while keeping the target-q phase argument fixed. The dynamical-
+        matrix symmetry validator is deliberately not affected by this flag.
         """
         if interpolation_mesh is None:
             if validate_symmetry:
@@ -102,6 +109,7 @@ class mesolver(_BaseMesolver):
             scattering_mesh=scattering_mesh,
             a2f_smearing=a2f_smearing,
             validate_symmetry=validate_symmetry,
+            elph_inverse_symmetry=elph_inverse_symmetry,
             phonon_evaluator=phonon_evaluator,
         )
 
@@ -177,7 +185,8 @@ class mesolver(_BaseMesolver):
 
         This constructs the same harmonic ``ThermalConductivity`` object used by
         ``calculate_a2f`` and checks every symmetry-related q-point pair using
-        the exact same Gamma builder used for the e-ph reconstruction.
+        the standard CellConstructor Gamma convention. The experimental e-ph
+        inverse-operation flag is intentionally irrelevant here.
         """
         tc = self._build_coarse_tc(
             scattering_mesh,
@@ -185,6 +194,44 @@ class mesolver(_BaseMesolver):
             automatic_a2f_smearing=automatic_a2f_smearing,
         )
         return self._run_dynamical_symmetry_validation(tc)
+
+    def _find_inverse_symmetry_index(self, tc, symmetry_index, tol=1.0e-8):
+        """Return the index of S^-1 in ``tc.rotations`` for symmetry S."""
+        rotations = np.asarray(tc.rotations, dtype=float)
+        rotation = rotations[symmetry_index]
+        identity = np.eye(3)
+        candidates = []
+        for inverse_index, candidate in enumerate(rotations):
+            if (
+                np.linalg.norm(np.dot(rotation, candidate) - identity) < tol
+                and np.linalg.norm(np.dot(candidate, rotation) - identity) < tol
+            ):
+                candidates.append(inverse_index)
+        if len(candidates) != 1:
+            raise RuntimeError(
+                "Could not identify a unique inverse for tc.rotations[%d]; candidates=%s"
+                % (symmetry_index, candidates)
+            )
+        return candidates[0]
+
+    def _inverse_elph_gamma_builder(self, tc, symmetry_index, qrot_cart):
+        """Experimental e-ph Gamma using S^-1 data for a mapping labelled by S.
+
+        The q-vector argument is deliberately the same target-q argument supplied
+        by the normal e-ph reconstruction. Only the symmetry rotation,
+        translation and atom map are replaced by those of the inverse operation.
+        This function is never used by dynamical-matrix validation.
+        """
+        inverse_index = self._find_inverse_symmetry_index(tc, symmetry_index)
+        rotations_cart, translations_cart = tc.get_sg_in_cartesian()
+        return CC.ThermalConductivity.construct_symmetry_matrix(
+            rotations_cart[inverse_index],
+            translations_cart[inverse_index],
+            qrot_cart,
+            tc.dyn.structure.coords,
+            tc.atom_map[inverse_index],
+            tc.unitcell,
+        )
 
     def _fractional_atom_positions(self):
         cell = np.asarray(self.dyn.structure.unit_cell, dtype=float)
@@ -221,20 +268,34 @@ class mesolver(_BaseMesolver):
             eig[3 * iat : 3 * (iat + 1), :] /= np.sqrt(self.dyn.structure.masses[at])
         return np.asarray(freq, dtype=float), eig
 
-    def _prepare_dense_real_space(self, tc, validate_symmetry=True):
+    def _prepare_dense_real_space(
+        self,
+        tc,
+        validate_symmetry=True,
+        elph_inverse_symmetry=False,
+    ):
         """Expand the irreducible coarse e-ph grid and Fourier transform it."""
         if validate_symmetry:
+            # Always validate CellConstructor dynamical matrices with the
+            # standard CellConstructor convention, independent of any e-ph-only
+            # experimental symmetry switch.
             self._run_dynamical_symmetry_validation(tc)
+
+        gamma_builder = None
+        if elph_inverse_symmetry:
+            gamma_builder = self._inverse_elph_gamma_builder
 
         coarse = expand_irreducible_elph(
             tc,
             self.elph_qpts,
             self.ep_deformation_potentials,
+            gamma_builder=gamma_builder,
             validate_collisions=validate_symmetry,
         )
         coarse.mesh = tuple(int(x) for x in self.elph_supercell)
         coarse.shift = (0.0, 0.0, 0.0)
         coarse.__post_init__()
+        self.elph_inverse_symmetry = bool(elph_inverse_symmetry)
         return elph_to_real_space(coarse)
 
     def _calculate_a2f_dense_isotropic(
@@ -246,10 +307,15 @@ class mesolver(_BaseMesolver):
         scattering_mesh,
         a2f_smearing,
         validate_symmetry,
+        elph_inverse_symmetry,
         phonon_evaluator,
     ):
         tc = self._build_coarse_tc(scattering_mesh, a2f_smearing)
-        real_space = self._prepare_dense_real_space(tc, validate_symmetry)
+        real_space = self._prepare_dense_real_space(
+            tc,
+            validate_symmetry,
+            elph_inverse_symmetry=elph_inverse_symmetry,
+        )
         mesh = tuple(int(x) for x in mesh)
         nq = int(np.prod(mesh))
         nph = 3 * self.dyn.structure.N_atoms
