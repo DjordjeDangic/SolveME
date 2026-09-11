@@ -86,7 +86,24 @@ The exact Fermi-surface-integrated deformation matrix is positive semidefinite, 
 
 `abs(M_min) <= max(1e-10, 1e-5 * max(abs(M_modes)))`.
 
-Accepted negative values are clipped to zero and a `RuntimeWarning` is emitted. Larger violations still raise a `RuntimeError`. The thresholds can be changed with `negative_atol` and `negative_rtol` in `calculate_solver_linewidth_path`.
+Accepted negative values are clipped to zero and a `RuntimeWarning` is emitted. Larger violations still raise a `RuntimeError`.
+
+The tolerance is part of the public linewidth API and can be changed directly with `negative_atol` and `negative_rtol` in `calculate_solver_linewidth_path`. For example:
+
+```python
+result = calculate_solver_linewidth_path(
+    solver,
+    qpoints,
+    negative_atol=1.0e-9,
+    negative_rtol=5.0e-5,
+)
+```
+
+The effective clipping threshold at each q point is
+
+`max(negative_atol, negative_rtol * max(abs(M_modes)))`.
+
+This makes it possible to tighten or relax the positivity check without editing SolveME source code.
 
 ## Physical convention check
 
