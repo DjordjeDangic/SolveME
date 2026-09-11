@@ -206,6 +206,34 @@ def transform_elph_matrix(matrix, gamma=None, time_reversal=False):
     return transformed
 
 
+def _fractional_atom_positions(tc):
+    """Return structure positions in fractional direct-lattice coordinates."""
+    coords = np.asarray(tc.dyn.structure.coords, dtype=float)
+    cell = np.asarray(tc.unitcell, dtype=float)
+    return np.dot(coords, np.linalg.inv(cell))
+
+
+def apply_reciprocal_gauge(matrix, tc, reciprocal_shift, sign=-1.0):
+    """Move a displacement-space matrix between q and q+G Bloch gauges.
+
+    ``reciprocal_shift`` is the integer G satisfying q_route = q_target + G.
+    With the default sign, this applies U_G^dagger M U_G with
+    U_G(ka)=exp(+i 2 pi G.tau_ka), converting the route matrix to the reduced
+    target-q gauge. ``sign=+1`` applies the opposite convention for diagnostics.
+    """
+    G = np.asarray(reciprocal_shift, dtype=float)
+    if G.shape != (3,):
+        raise ValueError("reciprocal_shift must have shape (3,)")
+    if np.all(G == 0):
+        return np.asarray(matrix)
+
+    tau = _fractional_atom_positions(tc)
+    atom_phase = np.exp(sign * 2.0j * np.pi * np.dot(tau, G))
+    phase = np.repeat(atom_phase, 3)
+    value = np.asarray(matrix)
+    return phase[:, None] * value * phase.conj()[None, :]
+
+
 def expand_irreducible_elph(
     tc,
     irred_qpoints,
@@ -215,8 +243,14 @@ def expand_irreducible_elph(
     gamma_builder: Optional[Callable] = None,
     validate_collisions: bool = False,
     collision_tol: float = 1.0e-7,
+    reciprocal_gauge: bool = False,
 ) -> ElphGrid:
-    """Reconstruct a full coarse q-grid from irreducible e-ph matrices."""
+    """Reconstruct a full coarse q-grid from irreducible e-ph matrices.
+
+    If ``reciprocal_gauge`` is True, each route is converted from its unreduced
+    q_target+G Bloch gauge to the reduced ``tc.qpoints`` target gauge before the
+    matrix is stored. This option affects only e-ph reconstruction.
+    """
     irred_qpoints = np.asarray(irred_qpoints, dtype=float)
     elph = np.asarray(elph)
     if elph.shape[0] != len(irred_qpoints):
@@ -238,9 +272,12 @@ def expand_irreducible_elph(
         gamma = None
         if mapping.symmetry_index is not None:
             gamma = gamma_cache[(mapping.irred_index, mapping.symmetry_index)]
-        output[mapping.target_index] = transform_elph_matrix(
+        value = transform_elph_matrix(
             elph[mapping.irred_index], gamma, mapping.time_reversal
         )
+        if reciprocal_gauge:
+            value = apply_reciprocal_gauge(value, tc, mapping.reciprocal_shift)
+        output[mapping.target_index] = value
 
     if validate_collisions:
         validate_symmetry_collisions(
@@ -250,6 +287,7 @@ def expand_irreducible_elph(
             mappings,
             gamma_builder=gamma_builder,
             tol=collision_tol,
+            reciprocal_gauge=reciprocal_gauge,
         )
 
     return ElphGrid(qpoints=np.asarray(tc.qpoints), matrices=output)
@@ -313,15 +351,17 @@ def validate_symmetry_collisions(
     *,
     gamma_builder=None,
     tol=1.0e-7,
+    reciprocal_gauge=False,
 ):
     """Check alternate symmetry paths from the selected irreducible source.
 
     If a failing comparison involves time reversal, the diagnostic also reports
     the relative error obtained when the same spatial symmetry transformation is
-    applied without complex conjugation.  It additionally compares Hermiticity,
-    traces, Hermitian spectra, and target-phonon-mode diagonal projections of the
-    two reconstructed matrices. These diagnostics do not alter the production
-    transformation.
+    applied without complex conjugation. It additionally compares Hermiticity,
+    traces, Hermitian spectra, and target-phonon-mode diagonal projections.
+
+    With ``reciprocal_gauge=True`` each route is first converted from q_target+G
+    to the reduced target-q Bloch gauge using the route-specific reciprocal shift.
     """
     rotations = np.asarray(tc.rotations)
     irred_qpoints = np.asarray(irred_qpoints, dtype=float)
@@ -347,14 +387,23 @@ def validate_symmetry_collisions(
             cache[key] = gamma_builder(tc, isym, qrot_cart)
         return cache[key]
 
+    def route_value(iirr, gamma, tr, G, gauge_sign=-1.0):
+        value = transform_elph_matrix(elph[iirr], gamma, tr)
+        if reciprocal_gauge:
+            value = apply_reciprocal_gauge(value, tc, G, sign=gauge_sign)
+        return value
+
     for target_index, qtarget in enumerate(full_qpoints):
         preferred = preferred_mappings[target_index]
         iirr = preferred.irred_index
         qsource = source_qpoints[iirr]
 
         preferred_gamma = get_gamma(iirr, preferred.symmetry_index, qsource)
-        reference = transform_elph_matrix(
-            elph[iirr], preferred_gamma, preferred.time_reversal
+        reference = route_value(
+            iirr,
+            preferred_gamma,
+            preferred.time_reversal,
+            preferred.reciprocal_shift,
         )
         scale = max(float(np.linalg.norm(reference)), 1.0)
 
@@ -369,18 +418,39 @@ def validate_symmetry_collisions(
             if isym == preferred.symmetry_index and tr == preferred.time_reversal:
                 continue
 
+            G = np.rint(np.asarray(qcand) - np.asarray(qtarget)).astype(int)
             gamma = get_gamma(iirr, isym, qsource)
-            value = transform_elph_matrix(elph[iirr], gamma, tr)
+            value = route_value(iirr, gamma, tr, G)
             error = float(np.linalg.norm(value - reference)) / scale
             if error > tol:
                 diagnostic = _collision_invariant_diagnostics(
                     tc, target_index, reference, value
                 )
+                diagnostic += (
+                    "; reciprocal shifts preferred=%s alternate=%s"
+                    % (np.asarray(preferred.reciprocal_shift), G)
+                )
+
+                if reciprocal_gauge:
+                    reference_opposite = route_value(
+                        iirr,
+                        preferred_gamma,
+                        preferred.time_reversal,
+                        preferred.reciprocal_shift,
+                        gauge_sign=+1.0,
+                    )
+                    value_opposite = route_value(
+                        iirr, gamma, tr, G, gauge_sign=+1.0
+                    )
+                    opposite_scale = max(float(np.linalg.norm(reference_opposite)), 1.0)
+                    opposite_error = (
+                        float(np.linalg.norm(value_opposite - reference_opposite))
+                        / opposite_scale
+                    )
+                    diagnostic += "; opposite reciprocal-gauge sign error=%.3e" % opposite_error
 
                 if tr:
-                    value_no_tr = transform_elph_matrix(
-                        elph[iirr], gamma, time_reversal=False
-                    )
+                    value_no_tr = route_value(iirr, gamma, False, G)
                     error_no_tr = float(np.linalg.norm(value_no_tr - reference)) / scale
                     diagnostic += (
                         "; alternate-route error without TR conjugation=%.3e"
@@ -391,8 +461,11 @@ def validate_symmetry_collisions(
                     ).replace("; invariants:", "; no-TR invariants:")
 
                 if preferred.time_reversal:
-                    reference_no_tr = transform_elph_matrix(
-                        elph[iirr], preferred_gamma, time_reversal=False
+                    reference_no_tr = route_value(
+                        iirr,
+                        preferred_gamma,
+                        False,
+                        preferred.reciprocal_shift,
                     )
                     alt_scale = max(float(np.linalg.norm(reference_no_tr)), 1.0)
                     error_preferred_no_tr = (
