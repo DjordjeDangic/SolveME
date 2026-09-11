@@ -52,14 +52,11 @@ def build_qpoint_symmetry_map(tc, irred_qpoints, tol=DEFAULT_Q_TOL) -> List[QPoi
     for ifull, qtarget in enumerate(full_qpoints):
         candidates = []
         for iirr, qsource in enumerate(irred_qpoints):
-            # Identity/direct mapping is handled explicitly.  It is important
-            # for Gamma and avoids depending on how identity is ordered in tc.
             diff = np.asarray(qsource) - np.asarray(qtarget)
             G = np.rint(diff).astype(int)
             if np.linalg.norm(diff - G) < tol:
                 candidates.append(QPointMapping(ifull, iirr, None, False, G))
 
-            # Pure time reversal q -> -q.
             diff = -np.asarray(qsource) - np.asarray(qtarget)
             G = np.rint(diff).astype(int)
             if np.linalg.norm(diff - G) < tol:
@@ -84,9 +81,6 @@ def build_qpoint_symmetry_map(tc, irred_qpoints, tol=DEFAULT_Q_TOL) -> List[QPoi
                 % np.asarray(qtarget)
             )
 
-        # Prefer direct mappings, then non-time-reversed mappings, then the
-        # lowest irreducible/symmetry index.  This makes reconstruction
-        # deterministic when several symmetry paths reach the same q-point.
         candidates.sort(
             key=lambda m: (
                 m.symmetry_index is not None,
@@ -211,7 +205,14 @@ def validate_symmetry_collisions(
     gamma_builder=None,
     tol=1.0e-7,
 ):
-    """Check that all symmetry paths to each q-point produce the same matrix.
+    """Check alternate symmetry paths from the selected irreducible source.
+
+    For each target q-point, the production mapping first selects one
+    irreducible representative.  Validation must therefore compare alternate
+    symmetry operations that start from that *same* representative.  Mixing
+    paths from different irreducible input points can spuriously compare data
+    that are independent representatives in the input file and was the source
+    of false collision failures in real calculations.
 
     This expensive diagnostic is intended for tests/debugging rather than the
     production hot path.
@@ -222,37 +223,61 @@ def validate_symmetry_collisions(
     if gamma_builder is None:
         gamma_builder = _default_gamma_builder
 
-    cache = {}
-    for target_index, qtarget in enumerate(full_qpoints):
-        values = []
-        for iirr, qsource in enumerate(irred_qpoints):
-            paths = [(None, qsource, False), (None, -qsource, True)]
-            for isym, rotation in enumerate(rotations):
-                qrot = np.dot(rotation.T, qsource)
-                paths.extend(((isym, qrot, False), (isym, -qrot, True)))
-            for isym, qcand, tr in paths:
-                if not equivalent_qpoints(qcand, qtarget):
-                    continue
-                gamma = None
-                if isym is not None:
-                    key = (iirr, isym)
-                    if key not in cache:
-                        qrot = np.dot(rotations[isym].T, qsource)
-                        qrot_cart = np.dot(qrot, tc.reciprocal_lattice)
-                        cache[key] = gamma_builder(tc, isym, qrot_cart)
-                    gamma = cache[key]
-                values.append(transform_elph_matrix(elph[iirr], gamma, tr))
+    if len(preferred_mappings) != len(full_qpoints):
+        raise ValueError("preferred_mappings must contain one entry per full-grid q-point")
 
-        if len(values) < 2:
-            continue
-        reference = values[0]
+    cache = {}
+
+    def get_gamma(iirr, isym, qsource):
+        if isym is None:
+            return None
+        key = (iirr, isym)
+        if key not in cache:
+            qrot = np.dot(rotations[isym].T, qsource)
+            qrot_cart = np.dot(qrot, tc.reciprocal_lattice)
+            cache[key] = gamma_builder(tc, isym, qrot_cart)
+        return cache[key]
+
+    for target_index, qtarget in enumerate(full_qpoints):
+        preferred = preferred_mappings[target_index]
+        iirr = preferred.irred_index
+        qsource = irred_qpoints[iirr]
+
+        preferred_gamma = get_gamma(iirr, preferred.symmetry_index, qsource)
+        reference = transform_elph_matrix(
+            elph[iirr], preferred_gamma, preferred.time_reversal
+        )
         scale = max(float(np.linalg.norm(reference)), 1.0)
-        for value in values[1:]:
+
+        paths = [(None, qsource, False), (None, -qsource, True)]
+        for isym, rotation in enumerate(rotations):
+            qrot = np.dot(rotation.T, qsource)
+            paths.extend(((isym, qrot, False), (isym, -qrot, True)))
+
+        for isym, qcand, tr in paths:
+            if not equivalent_qpoints(qcand, qtarget):
+                continue
+            if isym == preferred.symmetry_index and tr == preferred.time_reversal:
+                continue
+
+            gamma = get_gamma(iirr, isym, qsource)
+            value = transform_elph_matrix(elph[iirr], gamma, tr)
             error = float(np.linalg.norm(value - reference)) / scale
             if error > tol:
                 raise RuntimeError(
-                    "Inconsistent symmetry paths for q-point %d: relative error %.3e"
-                    % (target_index, error)
+                    "Inconsistent symmetry paths for q-point %d from irreducible "
+                    "point %d: relative error %.3e (preferred symmetry=%s, "
+                    "preferred time_reversal=%s; alternate symmetry=%s, "
+                    "alternate time_reversal=%s)"
+                    % (
+                        target_index,
+                        iirr,
+                        error,
+                        str(preferred.symmetry_index),
+                        str(preferred.time_reversal),
+                        str(isym),
+                        str(tr),
+                    )
                 )
 
 
