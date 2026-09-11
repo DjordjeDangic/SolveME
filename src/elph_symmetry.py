@@ -266,7 +266,14 @@ def validate_symmetry_collisions(
     gamma_builder=None,
     tol=1.0e-7,
 ):
-    """Check alternate symmetry paths from the selected irreducible source."""
+    """Check alternate symmetry paths from the selected irreducible source.
+
+    If a failing comparison involves time reversal, the diagnostic also reports
+    the relative error obtained when the same spatial symmetry transformation is
+    applied without complex conjugation.  This does not change the production
+    transformation; it is only intended to identify the time-reversal convention
+    of the stored e-ph matrix.
+    """
     rotations = np.asarray(tc.rotations)
     irred_qpoints = np.asarray(irred_qpoints, dtype=float)
     full_qpoints = canonicalize_qpoints(tc.qpoints)
@@ -317,11 +324,36 @@ def validate_symmetry_collisions(
             value = transform_elph_matrix(elph[iirr], gamma, tr)
             error = float(np.linalg.norm(value - reference)) / scale
             if error > tol:
+                diagnostic = ""
+
+                if tr:
+                    value_no_tr = transform_elph_matrix(
+                        elph[iirr], gamma, time_reversal=False
+                    )
+                    error_no_tr = float(np.linalg.norm(value_no_tr - reference)) / scale
+                    diagnostic += (
+                        "; alternate-route error without TR conjugation=%.3e"
+                        % error_no_tr
+                    )
+
+                if preferred.time_reversal:
+                    reference_no_tr = transform_elph_matrix(
+                        elph[iirr], preferred_gamma, time_reversal=False
+                    )
+                    alt_scale = max(float(np.linalg.norm(reference_no_tr)), 1.0)
+                    error_preferred_no_tr = (
+                        float(np.linalg.norm(value - reference_no_tr)) / alt_scale
+                    )
+                    diagnostic += (
+                        "; error with preferred-route TR conjugation removed=%.3e"
+                        % error_preferred_no_tr
+                    )
+
                 raise RuntimeError(
                     "Inconsistent symmetry paths for tc.qpoints[%d]=%s from matched "
                     "e-ph irreducible point %d=%s (matched tc index %d): relative "
                     "error %.3e (preferred symmetry=%s, preferred TR=%s; alternate "
-                    "symmetry=%s, alternate TR=%s)"
+                    "symmetry=%s, alternate TR=%s)%s"
                     % (
                         target_index,
                         qtarget,
@@ -333,6 +365,7 @@ def validate_symmetry_collisions(
                         str(preferred.time_reversal),
                         str(isym),
                         str(tr),
+                        diagnostic,
                     )
                 )
 
