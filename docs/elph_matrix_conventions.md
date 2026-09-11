@@ -28,9 +28,17 @@ If the target point is reached through time reversal, the transformed matrix is 
 
 CellConstructor's `construct_symmetry_matrix` already contains the Bloch phase associated with the lattice translation required to map one basis atom onto another. Therefore the symmetry-expanded matrices are treated as being in the same periodic Bloch displacement convention as CellConstructor dynamical matrices.
 
+### Choosing between equivalent symmetry routes
+
+Several symmetry and/or time-reversal routes can reach the same target q point. Their raw Cartesian matrices need not be numerically identical even when mode-resolved observables and the absolute values of all matrix elements in the target phonon basis agree. Such differences can be phase/gauge choices, and an arbitrary choice based on the enumeration order of CellConstructor symmetry operations is not physically meaningful.
+
+`expand_irreducible_elph` therefore uses a continuity gauge by default. Exact input irreducible q points are fixed as identity-route anchors. The periodic coarse mesh is then grown outward. At each new q point, every valid symmetry/TR reconstruction is evaluated and the route minimizing the average relative Frobenius discontinuity to already-selected nearest-neighbor q points is selected. The symmetry index is used only as a deterministic final tie-break if continuity scores are equal.
+
+`build_qpoint_symmetry_map` remains available as a geometry-only deterministic mapper for compatibility and diagnostics. Passing `continuity_gauge=False` to `expand_irreducible_elph` restores that behavior.
+
 ## Fourier interpolation gauge
 
-The default Fourier interpolation gauge is now `cellconstructor`. In this mode **no additional basis-position phase is applied** before the q-to-R transform. This avoids double-counting the positional Bloch phase already implicit in the displacement convention used by `ThermalConductivity.construct_symmetry_matrix`.
+The default Fourier interpolation gauge is `cellconstructor`. In this mode **no additional basis-position phase is applied** before the q-to-R transform. This avoids double-counting the positional Bloch phase already implicit in the displacement convention used by `ThermalConductivity.construct_symmetry_matrix`.
 
 The older explicit basis-position conversion remains available only by requesting `gauge='basis'`. It applies
 
@@ -54,8 +62,8 @@ The implementation first reorders q-points by integer mesh coordinates, performs
 
 ## Validation expectations
 
-The symmetry layer must satisfy identity mapping, q-star coverage, time reversal, deterministic selection when several operations reach the same q-point, and equality of matrices obtained through different valid symmetry paths. The last condition is checked by `validate_symmetry_collisions` and is intended primarily for tests and debugging.
+The symmetry layer must satisfy identity mapping, q-star coverage, time reversal, and physically consistent reconstruction when several operations reach the same q point. `validate_symmetry_collisions` still compares alternate routes and reports Hermiticity, trace, spectrum, target-mode diagonal, and target-mode absolute-matrix diagnostics. A raw Cartesian route mismatch no longer aborts a calculation: validation emits a `RuntimeWarning` and reconstruction continues with the selected continuity gauge. This is intentional because route-dependent phase conventions can make raw matrices differ while their physical phonon-space invariants agree.
 
-The coarse-grid dynamical matrices can now be independently checked with `symmetry_validation.validate_dynamical_matrix_symmetry`. The primary test compares full dynamical matrices under `Gamma D Gamma^dagger`, so it is unaffected by eigenvector phases or rotations within degenerate subspaces. A secondary eigenspace diagnostic groups nearly degenerate eigenvalues and compares projectors rather than individual eigenvectors.
+The coarse-grid dynamical matrices are checked independently with `symmetry_validation.validate_dynamical_matrix_symmetry`. This check is unchanged by the e-ph continuity selection. The primary test compares full dynamical matrices under `Gamma D Gamma^dagger`, so it is unaffected by eigenvector phases or rotations within degenerate subspaces. A secondary eigenspace diagnostic groups nearly degenerate eigenvalues and compares projectors rather than individual eigenvectors.
 
 The Fourier layer must satisfy: q->R->q reproduces every coarse-grid matrix; shifted meshes round-trip exactly; and interpolation onto a commensurate denser mesh reproduces the original values at every coarse q-point contained in the fine mesh.
