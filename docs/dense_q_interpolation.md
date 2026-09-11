@@ -80,6 +80,31 @@ results = me.converge_q_meshes(
 
 Convergence should be assessed using the shape of alpha2F together with lambda, omega_log, Tc, and the superconducting gap, rather than using a single scalar alone.
 
+## Small negative interpolated mode couplings
+
+The exact Fermi-surface-integrated deformation matrix is positive semidefinite, but Fourier interpolation and floating-point roundoff can produce very small negative eigenvalues after projection to phonon modes. The linewidth path therefore uses a mixed absolute/relative tolerance. By default, a negative mode-deformation value is treated as interpolation noise when
+
+`abs(M_min) <= max(1e-10, 1e-5 * max(abs(M_modes)))`.
+
+Accepted negative values are clipped to zero and a `RuntimeWarning` is emitted. Larger violations still raise a `RuntimeError`.
+
+The tolerance is part of the public linewidth API and can be changed directly with `negative_atol` and `negative_rtol` in `calculate_solver_linewidth_path`. For example:
+
+```python
+result = calculate_solver_linewidth_path(
+    solver,
+    qpoints,
+    negative_atol=1.0e-9,
+    negative_rtol=5.0e-5,
+)
+```
+
+The effective clipping threshold at each q point is
+
+`max(negative_atol, negative_rtol * max(abs(M_modes)))`.
+
+This makes it possible to tighten or relax the positivity check without editing SolveME source code.
+
 ## Physical convention check
 
 The Fourier gauge convention is documented in `docs/elph_matrix_conventions.md`. Before production use, verify its atomic-position phase against the exact Quantum ESPRESSO/EPW deformation-potential convention used to generate the input files. The phase handling is isolated in `to_periodic_gauge()` and `from_periodic_gauge()` so the sign convention can be corrected without changing the interpolation machinery.

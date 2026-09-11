@@ -25,6 +25,7 @@ phonon eigenvectors inside the degenerate manifold.
 
 from dataclasses import dataclass
 from typing import Sequence
+import warnings
 
 import numpy as np
 
@@ -87,6 +88,49 @@ def _degeneracy_safe_mode_deformation(mode_matrix, freq, atol, rtol):
     return values
 
 
+def _clip_small_negative_deformation(values, atol=1.0e-10, rtol=1.0e-5):
+    """Clip small negative interpolation noise while rejecting large PSD violations.
+
+    The deformation matrix represents a Fermi-surface |g|^2 covariance and is
+    therefore positive semidefinite in the exact theory. Fourier interpolation
+    and floating-point roundoff can nevertheless produce tiny negative mode
+    eigenvalues. A negative value is accepted as numerical noise when
+
+        |value_min| <= max(atol, rtol * max(|values|)).
+
+    Accepted negatives are clipped to zero and reported with ``RuntimeWarning``.
+    Larger negative values still raise ``RuntimeError``.
+    """
+    values = np.asarray(values, dtype=float)
+    if atol < 0.0 or rtol < 0.0:
+        raise ValueError("negative tolerances must be non-negative")
+    if values.size == 0:
+        return values.copy()
+
+    minimum = float(np.min(values))
+    if minimum >= 0.0:
+        return values.copy()
+
+    scale = max(float(np.max(np.abs(values))), 1.0e-14)
+    tolerance = max(float(atol), float(rtol) * scale)
+
+    if minimum < -tolerance:
+        raise RuntimeError(
+            "interpolated mode deformation matrix has a significantly negative "
+            "eigenvalue (minimum %.6e, tolerance %.6e, scale %.6e)"
+            % (minimum, tolerance, scale)
+        )
+
+    warnings.warn(
+        "Clipping small negative interpolated e-ph mode deformation values "
+        "(minimum %.6e, tolerance %.6e, scale %.6e)"
+        % (minimum, tolerance, scale),
+        RuntimeWarning,
+        stacklevel=2,
+    )
+    return np.where(values < 0.0, 0.0, values)
+
+
 def calculate_solver_linewidth_path(
     solver,
     qpoints: Sequence[Sequence[float]],
@@ -102,13 +146,20 @@ def calculate_solver_linewidth_path(
     frequency_tol: float = 1.0e-12,
     degeneracy_atol: float = 1.0e-8,
     degeneracy_rtol: float = 1.0e-5,
-    negative_tol: float = 1.0e-10,
+    negative_atol: float = 1.0e-10,
+    negative_rtol: float = 1.0e-5,
 ):
     """Calculate electron-phonon phonon linewidths along an arbitrary q path.
 
     ``elph_inverse_symmetry`` and ``elph_reciprocal_gauge`` are experimental
     e-ph-only convention switches. Neither changes the CellConstructor
     dynamical-matrix symmetry validation.
+
+    Small negative interpolated mode-deformation values are treated as numerical
+    noise when their magnitude is below
+    ``max(negative_atol, negative_rtol * max(abs(mode_deformation)))`` at that q.
+    They are clipped to zero with a RuntimeWarning. Larger negative values still
+    raise because the exact Fermi-surface |g|^2 covariance is positive semidefinite.
     """
     if solver.multiband:
         raise NotImplementedError("linewidth path currently supports isotropic input only")
@@ -146,13 +197,11 @@ def calculate_solver_linewidth_path(
                 degeneracy_atol,
                 degeneracy_rtol,
             )
-
-            if np.any(mat < -negative_tol):
-                raise RuntimeError(
-                    "interpolated mode deformation matrix has a significantly "
-                    "negative eigenvalue (minimum %.6e)" % float(np.min(mat))
-                )
-            mat = np.where(mat < 0.0, 0.0, mat)
+            mat = _clip_small_negative_deformation(
+                mat,
+                atol=negative_atol,
+                rtol=negative_rtol,
+            )
 
             valid = freq > frequency_tol
             lam = np.full(freq.shape, np.nan, dtype=float)

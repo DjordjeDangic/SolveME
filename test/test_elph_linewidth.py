@@ -2,10 +2,15 @@ import os
 import sys
 
 import numpy as np
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from elph_linewidth import PhononLinewidthPath, _degeneracy_safe_mode_deformation
+from elph_linewidth import (
+    PhononLinewidthPath,
+    _clip_small_negative_deformation,
+    _degeneracy_safe_mode_deformation,
+)
 
 
 def test_fwhm_property_is_twice_hwhm():
@@ -20,8 +25,6 @@ def test_fwhm_property_is_twice_hwhm():
 
 
 def test_epw_eq25_matches_solvemode_lambda_identity():
-    # SolveME uses lambda = M / (2 N_F omega^2). Combining this with
-    # EPW Eq. 25 gives gamma = pi M / 2 (hbar=1 in native energy units).
     deformation = np.array([0.04, 0.11, 0.20])
     omega = np.array([0.03, 0.07, 0.15])
     dos = 2.3
@@ -52,3 +55,35 @@ def test_degenerate_subspace_is_basis_invariant():
     )
     np.testing.assert_allclose(values[:2], expected_pair)
     np.testing.assert_allclose(values[2], 7.0)
+
+
+def test_small_negative_deformation_is_clipped_with_warning():
+    values = np.array([0.12, 0.08, -8.0e-7])
+    with pytest.warns(RuntimeWarning, match="Clipping small negative"):
+        clipped = _clip_small_negative_deformation(
+            values,
+            atol=1.0e-10,
+            rtol=1.0e-5,
+        )
+    np.testing.assert_allclose(clipped, [0.12, 0.08, 0.0])
+
+
+def test_large_negative_deformation_still_raises():
+    values = np.array([0.12, 0.08, -2.0e-5])
+    with pytest.raises(RuntimeError, match="significantly negative"):
+        _clip_small_negative_deformation(
+            values,
+            atol=1.0e-10,
+            rtol=1.0e-5,
+        )
+
+
+def test_absolute_negative_tolerance_handles_near_zero_scale():
+    values = np.array([5.0e-12, -5.0e-11])
+    with pytest.warns(RuntimeWarning):
+        clipped = _clip_small_negative_deformation(
+            values,
+            atol=1.0e-10,
+            rtol=1.0e-5,
+        )
+    np.testing.assert_allclose(clipped, [5.0e-12, 0.0])
