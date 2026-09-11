@@ -4,12 +4,10 @@ The transformation convention follows the pre-existing SolveME implementation:
 for a unitary space-group operation S, a Cartesian displacement-space matrix is
 transformed as Gamma(S,q) D(q) Gamma(S,q)^dagger. Mapping through -S q uses
 the complex-conjugated transformed matrix (time reversal).
-
-The module intentionally does not implement Fourier interpolation; it only
-reconstructs a complete coarse q grid.
 """
 
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
+import warnings
 
 import numpy as np
 
@@ -36,28 +34,15 @@ def _find_qpoint(qpoint, qpoints, tol=DEFAULT_Q_TOL):
 
 
 def match_irreducible_qpoints_to_tc(tc, irred_qpoints, tol=DEFAULT_Q_TOL):
-    """Match each input irreducible e-ph q point to one unique ``tc.qpoints`` index.
-
-    Matching is purely geometric and never relies on array ordering. Two points
-    are considered identical when they differ by an integer reciprocal-lattice
-    vector within ``tol``.
-
-    Returns
-    -------
-    numpy.ndarray
-        Integer array ``matched[iirr] = itc``.
-    """
+    """Match each input irreducible e-ph q point to one unique tc.qpoints index."""
     irred = canonicalize_qpoints(irred_qpoints)
     full = canonicalize_qpoints(tc.qpoints)
     matched = np.empty(len(irred), dtype=int)
     used = {}
 
     for iirr, q in enumerate(irred):
-        candidates = [
-            itc for itc, qtc in enumerate(full)
-            if equivalent_qpoints(q, qtc, tol)
-        ]
-        if len(candidates) == 0:
+        candidates = [itc for itc, qtc in enumerate(full) if equivalent_qpoints(q, qtc, tol)]
+        if not candidates:
             distances = np.array([
                 np.linalg.norm(_periodic_difference(q, qtc)) for qtc in full
             ])
@@ -89,22 +74,14 @@ def match_irreducible_qpoints_to_tc(tc, irred_qpoints, tol=DEFAULT_Q_TOL):
     return matched
 
 
-def build_qpoint_symmetry_map(tc, irred_qpoints, tol=DEFAULT_Q_TOL) -> List[QPointMapping]:
-    """Map every q-point in ``tc.qpoints`` to an irreducible e-ph q-point.
-
-    First, every input irreducible e-ph q point is matched one-to-one to the
-    CellConstructor full q grid by coordinate. The matched ``tc.qpoints`` values
-    are then used as the symmetry sources. Thus the reconstruction never assumes
-    the input q points and the CellConstructor q points have the same ordering.
-    """
+def build_qpoint_symmetry_candidates(tc, irred_qpoints, tol=DEFAULT_Q_TOL):
+    """Return all symmetry/TR routes from irreducible sources to every full-grid q."""
     irred_qpoints = canonicalize_qpoints(irred_qpoints)
     full_qpoints = canonicalize_qpoints(tc.qpoints)
-
     matched_tc_indices = match_irreducible_qpoints_to_tc(tc, irred_qpoints, tol)
     source_qpoints = full_qpoints[matched_tc_indices]
-
-    mappings: List[Optional[QPointMapping]] = [None] * len(full_qpoints)
     rotations = np.asarray(tc.rotations)
+    all_candidates = []
 
     for ifull, qtarget in enumerate(full_qpoints):
         candidates = []
@@ -121,7 +98,6 @@ def build_qpoint_symmetry_map(tc, irred_qpoints, tol=DEFAULT_Q_TOL) -> List[QPoi
 
             for isym, rotation in enumerate(rotations):
                 qrot = np.dot(rotation.T, qsource)
-
                 diff = qrot - qtarget
                 G = np.rint(diff).astype(int)
                 if np.linalg.norm(diff - G) < tol:
@@ -135,20 +111,34 @@ def build_qpoint_symmetry_map(tc, irred_qpoints, tol=DEFAULT_Q_TOL) -> List[QPoi
         if not candidates:
             raise RuntimeError(
                 "Could not map CellConstructor full-grid q-point %d %s to any "
-                "matched irreducible e-ph q-point"
-                % (ifull, np.asarray(qtarget))
+                "matched irreducible e-ph q-point" % (ifull, np.asarray(qtarget))
             )
+        all_candidates.append(candidates)
 
-        candidates.sort(
-            key=lambda m: (
-                m.symmetry_index is not None,
-                m.time_reversal,
-                m.irred_index,
-                -1 if m.symmetry_index is None else m.symmetry_index,
-            )
-        )
-        mappings[ifull] = candidates[0]
+    return all_candidates
 
+
+def _mapping_tiebreak_key(mapping):
+    return (
+        mapping.irred_index,
+        mapping.time_reversal,
+        mapping.symmetry_index is not None,
+        -1 if mapping.symmetry_index is None else mapping.symmetry_index,
+        tuple(np.asarray(mapping.reciprocal_shift, dtype=int)),
+    )
+
+
+def build_qpoint_symmetry_map(tc, irred_qpoints, tol=DEFAULT_Q_TOL) -> List[QPointMapping]:
+    """Build a deterministic geometry-only map.
+
+    Production expansion uses select_continuous_qpoint_symmetry_map instead.
+    """
+    candidate_sets = build_qpoint_symmetry_candidates(tc, irred_qpoints, tol)
+    mappings = []
+    for candidates in candidate_sets:
+        candidates = sorted(candidates, key=_mapping_tiebreak_key)
+        anchors = [m for m in candidates if m.symmetry_index is None and not m.time_reversal]
+        mappings.append(anchors[0] if anchors else candidates[0])
     return mappings
 
 
@@ -207,20 +197,13 @@ def transform_elph_matrix(matrix, gamma=None, time_reversal=False):
 
 
 def _fractional_atom_positions(tc):
-    """Return structure positions in fractional direct-lattice coordinates."""
     coords = np.asarray(tc.dyn.structure.coords, dtype=float)
     cell = np.asarray(tc.unitcell, dtype=float)
     return np.dot(coords, np.linalg.inv(cell))
 
 
 def apply_reciprocal_gauge(matrix, tc, reciprocal_shift, sign=-1.0):
-    """Move a displacement-space matrix between q and q+G Bloch gauges.
-
-    ``reciprocal_shift`` is the integer G satisfying q_route = q_target + G.
-    With the default sign, this applies U_G^dagger M U_G with
-    U_G(ka)=exp(+i 2 pi G.tau_ka), converting the route matrix to the reduced
-    target-q gauge. ``sign=+1`` applies the opposite convention for diagnostics.
-    """
+    """Move a displacement-space matrix between q and q+G Bloch gauges."""
     G = np.asarray(reciprocal_shift, dtype=float)
     if G.shape != (3,):
         raise ValueError("reciprocal_shift must have shape (3,)")
@@ -234,6 +217,156 @@ def apply_reciprocal_gauge(matrix, tc, reciprocal_shift, sign=-1.0):
     return phase[:, None] * value * phase.conj()[None, :]
 
 
+def _route_value(matrix, mapping, gamma_cache, tc, reciprocal_gauge=False):
+    gamma = None
+    if mapping.symmetry_index is not None:
+        gamma = gamma_cache[(mapping.irred_index, mapping.symmetry_index)]
+    value = transform_elph_matrix(matrix, gamma, mapping.time_reversal)
+    if reciprocal_gauge:
+        value = apply_reciprocal_gauge(value, tc, mapping.reciprocal_shift)
+    return value
+
+
+def _relative_norm_difference(a, b, floor=1.0e-14):
+    scale = max(float(np.linalg.norm(a)), float(np.linalg.norm(b)), floor)
+    return float(np.linalg.norm(np.asarray(a) - np.asarray(b))) / scale
+
+
+def _regular_mesh_neighbors(tc, tol=1.0e-6):
+    """Return periodic nearest-neighbor q-point indices."""
+    qpoints = canonicalize_qpoints(tc.qpoints)
+    if not hasattr(tc, "kpoint_grid"):
+        neighbors = [[] for _ in qpoints]
+        for iq, q in enumerate(qpoints):
+            distances = np.array([
+                np.inf if jq == iq else np.linalg.norm(_periodic_difference(q, qp))
+                for jq, qp in enumerate(qpoints)
+            ])
+            dmin = float(np.min(distances))
+            if not np.isfinite(dmin):
+                continue
+            neighbors[iq] = [
+                jq for jq, distance in enumerate(distances) if abs(distance - dmin) <= tol
+            ]
+        return neighbors
+
+    mesh = tuple(int(x) for x in tc.kpoint_grid)
+    lookup = {}
+    for iq, q in enumerate(qpoints):
+        scaled = q * np.asarray(mesh, dtype=float)
+        rounded = np.rint(scaled)
+        if np.linalg.norm(scaled - rounded) > tol:
+            raise RuntimeError("tc.qpoints is not commensurate with tc.kpoint_grid")
+        index = tuple(np.mod(rounded.astype(int), mesh))
+        if index in lookup:
+            raise RuntimeError("tc.qpoints contains duplicate regular-mesh indices")
+        lookup[index] = iq
+
+    neighbors = [[] for _ in qpoints]
+    for index, iq in lookup.items():
+        for axis in range(3):
+            for step in (-1, 1):
+                candidate = list(index)
+                candidate[axis] = (candidate[axis] + step) % mesh[axis]
+                jq = lookup[tuple(candidate)]
+                if jq != iq and jq not in neighbors[iq]:
+                    neighbors[iq].append(jq)
+    return neighbors
+
+
+def select_continuous_qpoint_symmetry_map(
+    tc,
+    irred_qpoints,
+    elph,
+    *,
+    gamma_builder: Optional[Callable] = None,
+    reciprocal_gauge: bool = False,
+    tol: float = DEFAULT_Q_TOL,
+):
+    """Choose one route per q by continuity with already-selected nearest neighbors.
+
+    Exact irreducible source q points are fixed as identity-route anchors. The
+    periodic mesh is then grown outward. At each step every valid symmetry/TR
+    route is reconstructed and scored by the mean relative Frobenius distance
+    to already-selected nearest neighbors. Symmetry indices are used only as a
+    deterministic final tie-break.
+    """
+    irred_qpoints = np.asarray(irred_qpoints, dtype=float)
+    elph = np.asarray(elph)
+    candidate_sets = build_qpoint_symmetry_candidates(tc, irred_qpoints, tol)
+    flat_candidates = [m for candidates in candidate_sets for m in candidates]
+    gamma_cache = construct_gamma_cache(tc, irred_qpoints, flat_candidates, gamma_builder)
+    neighbors = _regular_mesh_neighbors(tc, tol)
+
+    selected = [None] * len(candidate_sets)
+    values = [None] * len(candidate_sets)
+    frontier = set()
+
+    for target_index, candidates in enumerate(candidate_sets):
+        anchors = [m for m in candidates if m.symmetry_index is None and not m.time_reversal]
+        if not anchors:
+            continue
+        anchor = sorted(anchors, key=_mapping_tiebreak_key)[0]
+        selected[target_index] = anchor
+        values[target_index] = _route_value(
+            elph[anchor.irred_index], anchor, gamma_cache, tc, reciprocal_gauge
+        )
+        frontier.update(j for j in neighbors[target_index] if selected[j] is None)
+
+    if not any(mapping is not None for mapping in selected):
+        first = sorted(candidate_sets[0], key=_mapping_tiebreak_key)[0]
+        selected[0] = first
+        values[0] = _route_value(
+            elph[first.irred_index], first, gamma_cache, tc, reciprocal_gauge
+        )
+        frontier.update(neighbors[0])
+
+    while any(mapping is None for mapping in selected):
+        available = sorted(i for i in frontier if selected[i] is None)
+        if not available:
+            available = [i for i, mapping in enumerate(selected) if mapping is None]
+
+        best_target = None
+        best_mapping = None
+        best_value = None
+        best_key = None
+
+        for target_index in available:
+            selected_neighbors = [j for j in neighbors[target_index] if selected[j] is not None]
+            if not selected_neighbors and frontier:
+                continue
+
+            for mapping in candidate_sets[target_index]:
+                value = _route_value(
+                    elph[mapping.irred_index], mapping, gamma_cache, tc, reciprocal_gauge
+                )
+                score = 0.0
+                if selected_neighbors:
+                    score = float(np.mean([
+                        _relative_norm_difference(value, values[j]) for j in selected_neighbors
+                    ]))
+                key = (score, _mapping_tiebreak_key(mapping), target_index)
+                if best_key is None or key < best_key:
+                    best_key = key
+                    best_target = target_index
+                    best_mapping = mapping
+                    best_value = value
+
+        if best_target is None:
+            best_target = available[0]
+            best_mapping = sorted(candidate_sets[best_target], key=_mapping_tiebreak_key)[0]
+            best_value = _route_value(
+                elph[best_mapping.irred_index], best_mapping, gamma_cache, tc, reciprocal_gauge
+            )
+
+        selected[best_target] = best_mapping
+        values[best_target] = best_value
+        frontier.discard(best_target)
+        frontier.update(j for j in neighbors[best_target] if selected[j] is None)
+
+    return selected
+
+
 def expand_irreducible_elph(
     tc,
     irred_qpoints,
@@ -244,12 +377,12 @@ def expand_irreducible_elph(
     validate_collisions: bool = False,
     collision_tol: float = 1.0e-7,
     reciprocal_gauge: bool = False,
+    continuity_gauge: bool = True,
 ) -> ElphGrid:
-    """Reconstruct a full coarse q-grid from irreducible e-ph matrices.
+    """Reconstruct a full coarse q grid from irreducible e-ph matrices.
 
-    If ``reciprocal_gauge`` is True, each route is converted from its unreduced
-    q_target+G Bloch gauge to the reduced ``tc.qpoints`` target gauge before the
-    matrix is stored. This option affects only e-ph reconstruction.
+    Equivalent routes are selected by neighbor continuity by default. Pass
+    continuity_gauge=False to use the geometry-only deterministic mapping.
     """
     irred_qpoints = np.asarray(irred_qpoints, dtype=float)
     elph = np.asarray(elph)
@@ -261,23 +394,25 @@ def expand_irreducible_elph(
     match_irreducible_qpoints_to_tc(tc, irred_qpoints)
 
     if mappings is None:
-        mappings = build_qpoint_symmetry_map(tc, irred_qpoints)
+        if continuity_gauge:
+            mappings = select_continuous_qpoint_symmetry_map(
+                tc,
+                irred_qpoints,
+                elph,
+                gamma_builder=gamma_builder,
+                reciprocal_gauge=reciprocal_gauge,
+            )
+        else:
+            mappings = build_qpoint_symmetry_map(tc, irred_qpoints)
     if len(mappings) != len(tc.qpoints):
         raise ValueError("mapping must contain one entry per full-grid q-point")
 
     gamma_cache = construct_gamma_cache(tc, irred_qpoints, mappings, gamma_builder)
     output = np.empty((len(tc.qpoints),) + elph.shape[1:], dtype=np.result_type(elph, complex))
-
     for mapping in mappings:
-        gamma = None
-        if mapping.symmetry_index is not None:
-            gamma = gamma_cache[(mapping.irred_index, mapping.symmetry_index)]
-        value = transform_elph_matrix(
-            elph[mapping.irred_index], gamma, mapping.time_reversal
+        output[mapping.target_index] = _route_value(
+            elph[mapping.irred_index], mapping, gamma_cache, tc, reciprocal_gauge
         )
-        if reciprocal_gauge:
-            value = apply_reciprocal_gauge(value, tc, mapping.reciprocal_shift)
-        output[mapping.target_index] = value
 
     if validate_collisions:
         validate_symmetry_collisions(
@@ -293,31 +428,22 @@ def expand_irreducible_elph(
     return ElphGrid(qpoints=np.asarray(tc.qpoints), matrices=output)
 
 
-def _relative_norm_difference(a, b, floor=1.0e-14):
-    scale = max(float(np.linalg.norm(a)), float(np.linalg.norm(b)), floor)
-    return float(np.linalg.norm(np.asarray(a) - np.asarray(b))) / scale
-
-
 def _collision_invariant_diagnostics(tc, target_index, reference, value):
     """Compare basis-insensitive and phonon-projected diagnostics for two routes."""
     reference = np.asarray(reference, dtype=complex)
     value = np.asarray(value, dtype=complex)
-
     ref_h = 0.5 * (reference + np.swapaxes(reference.conj(), -1, -2))
     val_h = 0.5 * (value + np.swapaxes(value.conj(), -1, -2))
-
     ref_herm = _relative_norm_difference(reference, ref_h)
     val_herm = _relative_norm_difference(value, val_h)
-
-    ref_trace = np.trace(reference, axis1=-2, axis2=-1)
-    val_trace = np.trace(value, axis1=-2, axis2=-1)
-    trace_error = _relative_norm_difference(ref_trace, val_trace)
-
-    ref_eigs = np.linalg.eigvalsh(ref_h)
-    val_eigs = np.linalg.eigvalsh(val_h)
-    spectrum_error = _relative_norm_difference(ref_eigs, val_eigs)
+    trace_error = _relative_norm_difference(
+        np.trace(reference, axis1=-2, axis2=-1),
+        np.trace(value, axis1=-2, axis2=-1),
+    )
+    spectrum_error = _relative_norm_difference(np.linalg.eigvalsh(ref_h), np.linalg.eigvalsh(val_h))
 
     mode_diag_error = np.nan
+    mode_abs_error = np.nan
     eigvecs = getattr(tc, "eigvecs", None)
     if eigvecs is not None:
         eig = np.asarray(eigvecs[target_index], dtype=complex)
@@ -325,21 +451,18 @@ def _collision_invariant_diagnostics(tc, target_index, reference, value):
         if eig.shape != (ncart, ncart):
             eig = eig.T
         if eig.shape == (ncart, ncart):
-            ref_mode = np.einsum(
-                "ia,...ij,jb->...ab", eig.conj(), ref_h, eig, optimize=True
-            )
-            val_mode = np.einsum(
-                "ia,...ij,jb->...ab", eig.conj(), val_h, eig, optimize=True
-            )
+            ref_mode = np.einsum("ia,...ij,jb->...ab", eig.conj(), ref_h, eig, optimize=True)
+            val_mode = np.einsum("ia,...ij,jb->...ab", eig.conj(), val_h, eig, optimize=True)
             ref_diag = np.diagonal(ref_mode, axis1=-2, axis2=-1).real
             val_diag = np.diagonal(val_mode, axis1=-2, axis2=-1).real
             mode_diag_error = _relative_norm_difference(ref_diag, val_diag)
+            mode_abs_error = _relative_norm_difference(np.abs(ref_mode), np.abs(val_mode))
 
     return (
         "; invariants: hermiticity(preferred)=%.3e, hermiticity(alternate)=%.3e, "
         "trace error=%.3e, eigenvalue-spectrum error=%.3e, "
-        "target-mode diagonal error=%.3e"
-        % (ref_herm, val_herm, trace_error, spectrum_error, mode_diag_error)
+        "target-mode diagonal error=%.3e, target-mode |M| error=%.3e"
+        % (ref_herm, val_herm, trace_error, spectrum_error, mode_diag_error, mode_abs_error)
     )
 
 
@@ -353,16 +476,7 @@ def validate_symmetry_collisions(
     tol=1.0e-7,
     reciprocal_gauge=False,
 ):
-    """Check alternate symmetry paths from the selected irreducible source.
-
-    If a failing comparison involves time reversal, the diagnostic also reports
-    the relative error obtained when the same spatial symmetry transformation is
-    applied without complex conjugation. It additionally compares Hermiticity,
-    traces, Hermitian spectra, and target-phonon-mode diagonal projections.
-
-    With ``reciprocal_gauge=True`` each route is first converted from q_target+G
-    to the reduced target-q Bloch gauge using the route-specific reciprocal shift.
-    """
+    """Check alternate symmetry paths and warn, rather than abort, on mismatch."""
     rotations = np.asarray(tc.rotations)
     irred_qpoints = np.asarray(irred_qpoints, dtype=float)
     full_qpoints = canonicalize_qpoints(tc.qpoints)
@@ -371,7 +485,6 @@ def validate_symmetry_collisions(
 
     if gamma_builder is None:
         gamma_builder = _default_gamma_builder
-
     if len(preferred_mappings) != len(full_qpoints):
         raise ValueError("preferred_mappings must contain one entry per full-grid q-point")
 
@@ -393,17 +506,17 @@ def validate_symmetry_collisions(
             value = apply_reciprocal_gauge(value, tc, G, sign=gauge_sign)
         return value
 
+    failures = []
+    worst_error = -1.0
+    worst_message = None
+
     for target_index, qtarget in enumerate(full_qpoints):
         preferred = preferred_mappings[target_index]
         iirr = preferred.irred_index
         qsource = source_qpoints[iirr]
-
         preferred_gamma = get_gamma(iirr, preferred.symmetry_index, qsource)
         reference = route_value(
-            iirr,
-            preferred_gamma,
-            preferred.time_reversal,
-            preferred.reciprocal_shift,
+            iirr, preferred_gamma, preferred.time_reversal, preferred.reciprocal_shift
         )
         scale = max(float(np.linalg.norm(reference)), 1.0)
 
@@ -422,79 +535,71 @@ def validate_symmetry_collisions(
             gamma = get_gamma(iirr, isym, qsource)
             value = route_value(iirr, gamma, tr, G)
             error = float(np.linalg.norm(value - reference)) / scale
-            if error > tol:
-                diagnostic = _collision_invariant_diagnostics(
-                    tc, target_index, reference, value
+            if error <= tol:
+                continue
+
+            diagnostic = _collision_invariant_diagnostics(tc, target_index, reference, value)
+            diagnostic += (
+                "; reciprocal shifts preferred=%s alternate=%s"
+                % (np.asarray(preferred.reciprocal_shift), G)
+            )
+
+            if reciprocal_gauge:
+                reference_opposite = route_value(
+                    iirr, preferred_gamma, preferred.time_reversal,
+                    preferred.reciprocal_shift, gauge_sign=+1.0,
                 )
+                value_opposite = route_value(iirr, gamma, tr, G, gauge_sign=+1.0)
+                opposite_scale = max(float(np.linalg.norm(reference_opposite)), 1.0)
+                opposite_error = float(np.linalg.norm(value_opposite - reference_opposite)) / opposite_scale
+                diagnostic += "; opposite reciprocal-gauge sign error=%.3e" % opposite_error
+
+            if tr:
+                value_no_tr = route_value(iirr, gamma, False, G)
+                error_no_tr = float(np.linalg.norm(value_no_tr - reference)) / scale
+                diagnostic += "; alternate-route error without TR conjugation=%.3e" % error_no_tr
+                diagnostic += _collision_invariant_diagnostics(
+                    tc, target_index, reference, value_no_tr
+                ).replace("; invariants:", "; no-TR invariants:")
+
+            if preferred.time_reversal:
+                reference_no_tr = route_value(
+                    iirr, preferred_gamma, False, preferred.reciprocal_shift
+                )
+                alt_scale = max(float(np.linalg.norm(reference_no_tr)), 1.0)
+                error_preferred_no_tr = float(np.linalg.norm(value - reference_no_tr)) / alt_scale
                 diagnostic += (
-                    "; reciprocal shifts preferred=%s alternate=%s"
-                    % (np.asarray(preferred.reciprocal_shift), G)
+                    "; error with preferred-route TR conjugation removed=%.3e"
+                    % error_preferred_no_tr
                 )
 
-                if reciprocal_gauge:
-                    reference_opposite = route_value(
-                        iirr,
-                        preferred_gamma,
-                        preferred.time_reversal,
-                        preferred.reciprocal_shift,
-                        gauge_sign=+1.0,
-                    )
-                    value_opposite = route_value(
-                        iirr, gamma, tr, G, gauge_sign=+1.0
-                    )
-                    opposite_scale = max(float(np.linalg.norm(reference_opposite)), 1.0)
-                    opposite_error = (
-                        float(np.linalg.norm(value_opposite - reference_opposite))
-                        / opposite_scale
-                    )
-                    diagnostic += "; opposite reciprocal-gauge sign error=%.3e" % opposite_error
-
-                if tr:
-                    value_no_tr = route_value(iirr, gamma, False, G)
-                    error_no_tr = float(np.linalg.norm(value_no_tr - reference)) / scale
-                    diagnostic += (
-                        "; alternate-route error without TR conjugation=%.3e"
-                        % error_no_tr
-                    )
-                    diagnostic += _collision_invariant_diagnostics(
-                        tc, target_index, reference, value_no_tr
-                    ).replace("; invariants:", "; no-TR invariants:")
-
-                if preferred.time_reversal:
-                    reference_no_tr = route_value(
-                        iirr,
-                        preferred_gamma,
-                        False,
-                        preferred.reciprocal_shift,
-                    )
-                    alt_scale = max(float(np.linalg.norm(reference_no_tr)), 1.0)
-                    error_preferred_no_tr = (
-                        float(np.linalg.norm(value - reference_no_tr)) / alt_scale
-                    )
-                    diagnostic += (
-                        "; error with preferred-route TR conjugation removed=%.3e"
-                        % error_preferred_no_tr
-                    )
-
-                raise RuntimeError(
-                    "Inconsistent symmetry paths for tc.qpoints[%d]=%s from matched "
-                    "e-ph irreducible point %d=%s (matched tc index %d): relative "
-                    "error %.3e (preferred symmetry=%s, preferred TR=%s; alternate "
-                    "symmetry=%s, alternate TR=%s)%s"
-                    % (
-                        target_index,
-                        qtarget,
-                        iirr,
-                        irred_qpoints[iirr],
-                        matched_tc_indices[iirr],
-                        error,
-                        str(preferred.symmetry_index),
-                        str(preferred.time_reversal),
-                        str(isym),
-                        str(tr),
-                        diagnostic,
-                    )
+            message = (
+                "Inconsistent symmetry paths for tc.qpoints[%d]=%s from matched "
+                "e-ph irreducible point %d=%s (matched tc index %d): relative "
+                "error %.3e (preferred symmetry=%s, preferred TR=%s; alternate "
+                "symmetry=%s, alternate TR=%s)%s"
+                % (
+                    target_index, qtarget, iirr, irred_qpoints[iirr],
+                    matched_tc_indices[iirr], error,
+                    str(preferred.symmetry_index), str(preferred.time_reversal),
+                    str(isym), str(tr), diagnostic,
                 )
+            )
+            failures.append(message)
+            if error > worst_error:
+                worst_error = error
+                worst_message = message
+
+    if failures:
+        warnings.warn(
+            "Electron-phonon symmetry validation found %d raw Cartesian route "
+            "mismatches above %.1e. Reconstruction continues using the selected "
+            "continuity gauge. Worst mismatch:\n%s"
+            % (len(failures), tol, worst_message),
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    return failures
 
 
 def get_elph_on_full_grid(tc, elph, tc_qpt_id, star_id):
