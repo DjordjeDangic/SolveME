@@ -14,7 +14,13 @@ gives, in CellConstructor/SolveME energy-frequency units (hbar = 1),
 
     gamma(q,nu) = pi M(q,nu) / 2,
 
-where gamma is the HWHM.  The FWHM is 2*gamma.
+where gamma is the HWHM. The FWHM is 2*gamma.
+
+At exact or near phonon degeneracies, individual phonon eigenvectors are not
+unique.  The code therefore diagonalizes the Hermitian projected e-ph matrix
+inside each degenerate frequency subspace before assigning mode linewidths.
+This makes the linewidth eigenvalues invariant to arbitrary rotations of the
+phonon eigenvectors inside the degenerate manifold.
 """
 
 from dataclasses import dataclass
@@ -54,6 +60,36 @@ def _as_fractional_qpoints(tc, qpoints, coordinates):
     return canonicalize_qpoints(qfrac)
 
 
+def _degenerate_groups(freq, atol, rtol):
+    freq = np.asarray(freq, dtype=float)
+    groups = []
+    start = 0
+    for i in range(1, len(freq)):
+        scale = max(abs(freq[i]), abs(freq[i - 1]), 1.0e-14)
+        if abs(freq[i] - freq[i - 1]) > atol + rtol * scale:
+            groups.append(slice(start, i))
+            start = i
+    groups.append(slice(start, len(freq)))
+    return groups
+
+
+def _degeneracy_safe_mode_deformation(mode_matrix, freq, atol, rtol):
+    """Return basis-invariant mode couplings inside degenerate subspaces."""
+    matrix = np.asarray(mode_matrix, dtype=complex)
+    hermitian = 0.5 * (matrix + matrix.conj().T)
+    values = np.empty(len(freq), dtype=float)
+
+    for group in _degenerate_groups(freq, atol, rtol):
+        block = hermitian[group, group]
+        if block.shape == (1, 1):
+            values[group] = block[0, 0].real
+        else:
+            # The eigenvalues of this restricted self-energy/coupling block do
+            # not depend on the arbitrary phonon basis chosen by diagonalization.
+            values[group] = np.linalg.eigvalsh(block)
+    return values
+
+
 def calculate_solver_linewidth_path(
     solver,
     qpoints: Sequence[Sequence[float]],
@@ -65,6 +101,9 @@ def calculate_solver_linewidth_path(
     block_size: int = 64,
     validate_symmetry: bool = False,
     frequency_tol: float = 1.0e-12,
+    degeneracy_atol: float = 1.0e-8,
+    degeneracy_rtol: float = 1.0e-5,
+    negative_tol: float = 1.0e-10,
 ):
     """Calculate electron-phonon phonon linewidths along an arbitrary q path.
 
@@ -73,20 +112,22 @@ def calculate_solver_linewidth_path(
     solver
         A loaded ``dense_mesolver.mesolver`` instance.
     qpoints
-        Path points.  With ``coordinates='cartesian'`` these must use the same
+        Path points. With ``coordinates='cartesian'`` these must use the same
         CellConstructor reciprocal convention as ``tc.k_points`` and
         ``ForceTensor.get_phonons_in_qpath`` (reciprocal lattice without an
-        extra 2*pi).  With ``coordinates='fractional'`` they are fractional
+        extra 2*pi). With ``coordinates='fractional'`` they are fractional
         reciprocal coordinates.
     smear_id
         Electronic smearing/DOS index used for the deformation matrix and DOS.
+    degeneracy_atol, degeneracy_rtol
+        Frequency tolerances for grouping degenerate/near-degenerate phonons.
 
     Returns
     -------
     PhononLinewidthPath
         Frequencies, projected mode deformation values, lambda(q,nu), and
-        linewidth HWHM gamma(q,nu), all in the native CellConstructor energy
-        units except lambda, which is dimensionless.
+        linewidth HWHM gamma(q,nu), all in native CellConstructor energy units
+        except lambda, which is dimensionless. Unstable/zero modes are NaN.
     """
     if solver.multiband:
         raise NotImplementedError("linewidth path currently supports isotropic input only")
@@ -112,15 +153,29 @@ def calculate_solver_linewidth_path(
     ):
         for iloc in range(len(block.qpoints)):
             freq = np.asarray(block.frequencies[iloc], dtype=float)
-            mode_matrix = np.asarray(block.mode_matrices[iloc])
-            # Isotropic input shape at one q is (nsmear, nmode, nmode).
-            mat = np.diagonal(mode_matrix, axis1=-2, axis2=-1)[smear_id].real
+            mode_matrix = np.asarray(block.mode_matrices[iloc])[smear_id]
+            mat = _degeneracy_safe_mode_deformation(
+                mode_matrix,
+                freq,
+                degeneracy_atol,
+                degeneracy_rtol,
+            )
+
+            # A Fermi-surface |g|^2 integral is positive semidefinite.  Permit
+            # tiny negative interpolation/roundoff noise, but fail loudly for
+            # a significant negative eigenvalue of the coupling block.
+            if np.any(mat < -negative_tol):
+                raise RuntimeError(
+                    "interpolated mode deformation matrix has a significantly "
+                    "negative eigenvalue (minimum %.6e)" % float(np.min(mat))
+                )
+            mat = np.where(mat < 0.0, 0.0, mat)
 
             valid = freq > frequency_tol
             lam = np.full(freq.shape, np.nan, dtype=float)
             gam = np.full(freq.shape, np.nan, dtype=float)
             lam[valid] = mat[valid] / (2.0 * dos * freq[valid] ** 2)
-            # EPW gamma is the half-width.  This identity follows from Eq. 25
+            # EPW gamma is the half-width. This identity follows from Eq. 25
             # and the SolveME definition of the mode-resolved lambda above.
             gam[valid] = 0.5 * np.pi * mat[valid]
 
