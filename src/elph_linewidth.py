@@ -17,7 +17,7 @@ gives, in CellConstructor/SolveME energy-frequency units (hbar = 1),
 where gamma is the HWHM. The FWHM is 2*gamma.
 
 At exact or near phonon degeneracies, individual phonon eigenvectors are not
-unique.  The code therefore diagonalizes the Hermitian projected e-ph matrix
+unique. The code therefore diagonalizes the Hermitian projected e-ph matrix
 inside each degenerate frequency subspace before assigning mode linewidths.
 This makes the linewidth eigenvalues invariant to arbitrary rotations of the
 phonon eigenvectors inside the degenerate manifold.
@@ -53,7 +53,6 @@ def _as_fractional_qpoints(tc, qpoints, coordinates):
     if coordinates == "fractional":
         qfrac = qpoints
     elif coordinates == "cartesian":
-        # CellConstructor convention: k_points = qpoints @ reciprocal_lattice.
         qfrac = np.dot(qpoints, np.linalg.inv(np.asarray(tc.reciprocal_lattice)))
     else:
         raise ValueError("coordinates must be 'fractional' or 'cartesian'")
@@ -84,8 +83,6 @@ def _degeneracy_safe_mode_deformation(mode_matrix, freq, atol, rtol):
         if block.shape == (1, 1):
             values[group] = block[0, 0].real
         else:
-            # The eigenvalues of this restricted self-energy/coupling block do
-            # not depend on the arbitrary phonon basis chosen by diagonalization.
             values[group] = np.linalg.eigvalsh(block)
     return values
 
@@ -101,6 +98,7 @@ def calculate_solver_linewidth_path(
     block_size: int = 64,
     validate_symmetry: bool = True,
     elph_inverse_symmetry: bool = False,
+    elph_reciprocal_gauge: bool = False,
     frequency_tol: float = 1.0e-12,
     degeneracy_atol: float = 1.0e-8,
     degeneracy_rtol: float = 1.0e-5,
@@ -108,35 +106,9 @@ def calculate_solver_linewidth_path(
 ):
     """Calculate electron-phonon phonon linewidths along an arbitrary q path.
 
-    Parameters
-    ----------
-    solver
-        A loaded ``dense_mesolver.mesolver`` instance.
-    qpoints
-        Path points. With ``coordinates='cartesian'`` these must use the same
-        CellConstructor reciprocal convention as ``tc.k_points`` and
-        ``ForceTensor.get_phonons_in_qpath`` (reciprocal lattice without an
-        extra 2*pi). With ``coordinates='fractional'`` they are fractional
-        reciprocal coordinates.
-    smear_id
-        Electronic smearing/DOS index used for the deformation matrix and DOS.
-    validate_symmetry
-        Run dynamical-matrix and electron-phonon symmetry validation before
-        interpolation. Enabled by default; set False only to bypass diagnostics.
-    elph_inverse_symmetry
-        Experimental e-ph-only convention switch. When True, the e-ph Gamma for
-        a mapping labelled by S is built from the CellConstructor data for S^-1.
-        The dynamical-matrix symmetry validation remains on the normal
-        CellConstructor convention and is not affected by this flag.
-    degeneracy_atol, degeneracy_rtol
-        Frequency tolerances for grouping degenerate/near-degenerate phonons.
-
-    Returns
-    -------
-    PhononLinewidthPath
-        Frequencies, projected mode deformation values, lambda(q,nu), and
-        linewidth HWHM gamma(q,nu), all in native CellConstructor energy units
-        except lambda, which is dimensionless. Unstable/zero modes are NaN.
+    ``elph_inverse_symmetry`` and ``elph_reciprocal_gauge`` are experimental
+    e-ph-only convention switches. Neither changes the CellConstructor
+    dynamical-matrix symmetry validation.
     """
     if solver.multiband:
         raise NotImplementedError("linewidth path currently supports isotropic input only")
@@ -148,6 +120,7 @@ def calculate_solver_linewidth_path(
         tc,
         validate_symmetry,
         elph_inverse_symmetry=elph_inverse_symmetry,
+        elph_reciprocal_gauge=elph_reciprocal_gauge,
     )
     qfrac = _as_fractional_qpoints(tc, qpoints, coordinates)
 
@@ -174,9 +147,6 @@ def calculate_solver_linewidth_path(
                 degeneracy_rtol,
             )
 
-            # A Fermi-surface |g|^2 integral is positive semidefinite.  Permit
-            # tiny negative interpolation/roundoff noise, but fail loudly for
-            # a significant negative eigenvalue of the coupling block.
             if np.any(mat < -negative_tol):
                 raise RuntimeError(
                     "interpolated mode deformation matrix has a significantly "
@@ -188,8 +158,6 @@ def calculate_solver_linewidth_path(
             lam = np.full(freq.shape, np.nan, dtype=float)
             gam = np.full(freq.shape, np.nan, dtype=float)
             lam[valid] = mat[valid] / (2.0 * dos * freq[valid] ** 2)
-            # EPW gamma is the half-width. This identity follows from Eq. 25
-            # and the SolveME definition of the mode-resolved lambda above.
             gam[valid] = 0.5 * np.pi * mat[valid]
 
             frequencies.append(freq)
