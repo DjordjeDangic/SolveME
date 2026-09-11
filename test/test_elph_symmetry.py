@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from elph_symmetry import (
     build_qpoint_symmetry_map,
     expand_irreducible_elph,
+    select_continuous_qpoint_symmetry_map,
     transform_elph_matrix,
     validate_symmetry_collisions,
 )
@@ -24,8 +25,6 @@ class MockTC:
                 [0.00, 0.75, 0.0],
             ]
         )
-        # Identity and a 90-degree rotation about z.  The legacy SolveME
-        # convention applies rotation.T to fractional q coordinates.
         self.rotations = np.array(
             [
                 np.eye(3),
@@ -39,7 +38,6 @@ def gamma_builder(tc, symmetry_index, qrot_cart):
     del tc, qrot_cart
     if symmetry_index == 0:
         return np.eye(2)
-    # Mock displacement representation: exchange the two coordinates.
     return np.array([[0.0, 1.0], [1.0, 0.0]], dtype=complex)
 
 
@@ -106,37 +104,62 @@ def test_collision_validator_accepts_consistent_duplicate_paths():
     tc = MockTC()
     source = np.array([np.eye(2, dtype=complex)])
     mappings = build_qpoint_symmetry_map(tc, np.array([[0.25, 0.0, 0.0]]))
-    validate_symmetry_collisions(
+    failures = validate_symmetry_collisions(
         tc,
         np.array([[0.25, 0.0, 0.0]]),
         source,
         mappings,
         gamma_builder=gamma_builder,
     )
+    assert failures == []
 
 
-def test_collision_validator_rejects_inconsistent_duplicate_paths():
+def test_collision_validator_warns_on_inconsistent_duplicate_paths():
     tc = MockTC()
-    # Add a second identity reciprocal-space operation.  It reaches the same
-    # q-point by a different symmetry path, so the displacement representation
-    # must produce the same transformed matrix.
     tc.rotations = np.concatenate([tc.rotations, np.eye(3)[None, :, :]], axis=0)
     source = np.array([np.diag([1.0, 3.0]).astype(complex)])
     mappings = build_qpoint_symmetry_map(tc, np.array([[0.25, 0.0, 0.0]]))
 
     def inconsistent_gamma_builder(tc, symmetry_index, qrot_cart):
         del tc, qrot_cart
-        if symmetry_index in (0,):
+        if symmetry_index == 0:
             return np.eye(2)
-        if symmetry_index == 2:
-            return np.array([[0.0, 1.0], [1.0, 0.0]], dtype=complex)
         return np.array([[0.0, 1.0], [1.0, 0.0]], dtype=complex)
 
-    with pytest.raises(RuntimeError, match="Inconsistent symmetry paths"):
-        validate_symmetry_collisions(
+    with pytest.warns(RuntimeWarning, match="symmetry validation found"):
+        failures = validate_symmetry_collisions(
             tc,
             np.array([[0.25, 0.0, 0.0]]),
             source,
             mappings,
             gamma_builder=inconsistent_gamma_builder,
         )
+    assert failures
+    assert "Inconsistent symmetry paths" in failures[0]
+
+
+def test_continuity_selector_prefers_smoother_route_over_lower_symmetry_index():
+    tc = MockTC()
+    # Duplicate the 90-degree operation. Both symmetry indices 1 and 2 reach
+    # q=[0,0.25,0] through time reversal. Index 1 swaps displacement coordinates,
+    # while index 2 leaves them unchanged. Since the source matrix is real, the
+    # index-2 route is exactly continuous with the source anchor and must win even
+    # though its symmetry index is larger.
+    tc.rotations = np.concatenate([tc.rotations, tc.rotations[1:2]], axis=0)
+    source = np.array([np.diag([1.0, 4.0]).astype(complex)])
+
+    def continuity_gamma_builder(tc, symmetry_index, qrot_cart):
+        del tc, qrot_cart
+        if symmetry_index == 1:
+            return np.array([[0.0, 1.0], [1.0, 0.0]], dtype=complex)
+        return np.eye(2, dtype=complex)
+
+    mappings = select_continuous_qpoint_symmetry_map(
+        tc,
+        np.array([[0.25, 0.0, 0.0]]),
+        source,
+        gamma_builder=continuity_gamma_builder,
+    )
+
+    assert mappings[1].symmetry_index == 2
+    assert mappings[1].time_reversal is True
