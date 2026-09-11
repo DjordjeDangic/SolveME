@@ -224,8 +224,6 @@ def expand_irreducible_elph(
     if elph.ndim < 3 or elph.shape[-1] != elph.shape[-2]:
         raise ValueError("e-ph matrices must have square trailing matrix axes")
 
-    # Always enforce the explicit one-to-one source-grid match, even when a
-    # precomputed symmetry mapping is supplied.
     match_irreducible_qpoints_to_tc(tc, irred_qpoints)
 
     if mappings is None:
@@ -257,6 +255,56 @@ def expand_irreducible_elph(
     return ElphGrid(qpoints=np.asarray(tc.qpoints), matrices=output)
 
 
+def _relative_norm_difference(a, b, floor=1.0e-14):
+    scale = max(float(np.linalg.norm(a)), float(np.linalg.norm(b)), floor)
+    return float(np.linalg.norm(np.asarray(a) - np.asarray(b))) / scale
+
+
+def _collision_invariant_diagnostics(tc, target_index, reference, value):
+    """Compare basis-insensitive and phonon-projected diagnostics for two routes."""
+    reference = np.asarray(reference, dtype=complex)
+    value = np.asarray(value, dtype=complex)
+
+    ref_h = 0.5 * (reference + np.swapaxes(reference.conj(), -1, -2))
+    val_h = 0.5 * (value + np.swapaxes(value.conj(), -1, -2))
+
+    ref_herm = _relative_norm_difference(reference, ref_h)
+    val_herm = _relative_norm_difference(value, val_h)
+
+    ref_trace = np.trace(reference, axis1=-2, axis2=-1)
+    val_trace = np.trace(value, axis1=-2, axis2=-1)
+    trace_error = _relative_norm_difference(ref_trace, val_trace)
+
+    ref_eigs = np.linalg.eigvalsh(ref_h)
+    val_eigs = np.linalg.eigvalsh(val_h)
+    spectrum_error = _relative_norm_difference(ref_eigs, val_eigs)
+
+    mode_diag_error = np.nan
+    eigvecs = getattr(tc, "eigvecs", None)
+    if eigvecs is not None:
+        eig = np.asarray(eigvecs[target_index], dtype=complex)
+        ncart = reference.shape[-1]
+        if eig.shape != (ncart, ncart):
+            eig = eig.T
+        if eig.shape == (ncart, ncart):
+            ref_mode = np.einsum(
+                "ia,...ij,jb->...ab", eig.conj(), ref_h, eig, optimize=True
+            )
+            val_mode = np.einsum(
+                "ia,...ij,jb->...ab", eig.conj(), val_h, eig, optimize=True
+            )
+            ref_diag = np.diagonal(ref_mode, axis1=-2, axis2=-1).real
+            val_diag = np.diagonal(val_mode, axis1=-2, axis2=-1).real
+            mode_diag_error = _relative_norm_difference(ref_diag, val_diag)
+
+    return (
+        "; invariants: hermiticity(preferred)=%.3e, hermiticity(alternate)=%.3e, "
+        "trace error=%.3e, eigenvalue-spectrum error=%.3e, "
+        "target-mode diagonal error=%.3e"
+        % (ref_herm, val_herm, trace_error, spectrum_error, mode_diag_error)
+    )
+
+
 def validate_symmetry_collisions(
     tc,
     irred_qpoints,
@@ -270,9 +318,10 @@ def validate_symmetry_collisions(
 
     If a failing comparison involves time reversal, the diagnostic also reports
     the relative error obtained when the same spatial symmetry transformation is
-    applied without complex conjugation.  This does not change the production
-    transformation; it is only intended to identify the time-reversal convention
-    of the stored e-ph matrix.
+    applied without complex conjugation.  It additionally compares Hermiticity,
+    traces, Hermitian spectra, and target-phonon-mode diagonal projections of the
+    two reconstructed matrices. These diagnostics do not alter the production
+    transformation.
     """
     rotations = np.asarray(tc.rotations)
     irred_qpoints = np.asarray(irred_qpoints, dtype=float)
@@ -324,7 +373,9 @@ def validate_symmetry_collisions(
             value = transform_elph_matrix(elph[iirr], gamma, tr)
             error = float(np.linalg.norm(value - reference)) / scale
             if error > tol:
-                diagnostic = ""
+                diagnostic = _collision_invariant_diagnostics(
+                    tc, target_index, reference, value
+                )
 
                 if tr:
                     value_no_tr = transform_elph_matrix(
@@ -335,6 +386,9 @@ def validate_symmetry_collisions(
                         "; alternate-route error without TR conjugation=%.3e"
                         % error_no_tr
                     )
+                    diagnostic += _collision_invariant_diagnostics(
+                        tc, target_index, reference, value_no_tr
+                    ).replace("; invariants:", "; no-TR invariants:")
 
                 if preferred.time_reversal:
                     reference_no_tr = transform_elph_matrix(
