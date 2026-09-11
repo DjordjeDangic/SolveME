@@ -3,7 +3,7 @@
 This module keeps the existing :class:`mesolver.mesolver` implementation
 unchanged and layers the dense-q harmonic path on top of it. Calling
 ``calculate_a2f`` without ``interpolation_mesh`` delegates exactly to the
-legacy solver, with optional symmetry validation performed first.
+legacy solver, with symmetry validation performed first by default.
 """
 
 import numpy as np
@@ -39,15 +39,15 @@ class mesolver(_BaseMesolver):
         interpolation_mesh=None,
         interpolation_shift=(0.0, 0.0, 0.0),
         interpolation_block_size=64,
-        validate_symmetry=False,
+        validate_symmetry=True,
         phonon_evaluator=None,
     ):
         """Calculate alpha2F, optionally on a Fourier-interpolated q mesh.
 
-        When ``validate_symmetry=True`` the same dynamical-matrix covariance
-        check is run in both the legacy irreducible-grid path and the dense-q
-        interpolation path.  The dense path additionally validates the e-ph
-        symmetry reconstruction before Fourier interpolation.
+        Symmetry validation is enabled by default. The same dynamical-matrix
+        covariance check is run in both the legacy irreducible-grid path and
+        the dense-q interpolation path. The dense path additionally validates
+        the e-ph symmetry reconstruction before Fourier interpolation.
         """
         if interpolation_mesh is None:
             if validate_symmetry:
@@ -221,7 +221,7 @@ class mesolver(_BaseMesolver):
             eig[3 * iat : 3 * (iat + 1), :] /= np.sqrt(self.dyn.structure.masses[at])
         return np.asarray(freq, dtype=float), eig
 
-    def _prepare_dense_real_space(self, tc, validate_symmetry=False):
+    def _prepare_dense_real_space(self, tc, validate_symmetry=True):
         """Expand the irreducible coarse e-ph grid and Fourier transform it."""
         if validate_symmetry:
             self._run_dynamical_symmetry_validation(tc)
